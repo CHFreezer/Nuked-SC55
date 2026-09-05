@@ -435,6 +435,7 @@ extern int mcu_st;
 extern int mcu_jv880;
 extern int mcu_scb55;
 extern int mcu_sc155;
+extern int pcm_float; // S1: pure-float resonant filter, per-add ±1.0 saturation (independent of chip select)
 
 extern SDL_atomic_t mcu_button_pressed;
 

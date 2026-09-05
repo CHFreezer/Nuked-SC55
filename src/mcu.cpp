@@ -15,7 +15,9 @@
  *
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #define SDL_MAIN_HANDLED
 #include "SDL.h"
 #include "mcu.h"
@@ -145,6 +147,8 @@ int mcu_st = 0; // 0 - SC-55mk2, 1 - SC-55ST
 int mcu_jv880 = 0; // 0 - SC-55, 1 - JV880
 int mcu_scb55 = 0; // 0 - sub mcu (e.g SC-55mk2), 1 - no sub mcu (e.g SCB-55)
 int mcu_sc155 = 0; // 0 - SC-55(MK2), 1 - SC-155(MK2)
+int pcm_float = 0; // S1: pure-float resonant filter, per-add ±1.0 saturation (independent of chip select)
+float master_gain = 1.0f; // overall output volume multiplier (linear), applied in MCU_PostSample before int16 clamp
 
 static int ga_int[8];
 static int ga_int_enable = 0;
@@ -1264,6 +1268,11 @@ void MCU_CloseAudio(void)
 
 void MCU_PostSample(int *sample)
 {
+    if (master_gain != 1.0f)
+    {
+        sample[0] = (int)((float)sample[0] * master_gain);
+        sample[1] = (int)((float)sample[1] * master_gain);
+    }
     sample[0] >>= 15;
     if (sample[0] > INT16_MAX)
         sample[0] = INT16_MAX;
@@ -1398,6 +1407,32 @@ int main(int argc, char *argv[])
                 romset = ROM_SET_MK2;
                 autodetect = false;
             }
+            else if (!strcmp(argv[i], "-float"))
+            {
+                pcm_float = 1;
+            }
+            else if (!strncmp(argv[i], "-gain:", 6))
+            {
+                // "<number>" = linear multiplier; "<number>db" = decibels,
+                // scale = pow(10, db / 20) (same convention as the standard frontend).
+                const char* val = argv[i] + 6;
+                size_t len = strlen(val);
+                if (len >= 2 && (val[len - 2] == 'd' || val[len - 2] == 'D') &&
+                    (val[len - 1] == 'b' || val[len - 1] == 'B'))
+                {
+                    char tmp[32];
+                    size_t n = len - 2;
+                    if (n > sizeof(tmp) - 1)
+                        n = sizeof(tmp) - 1;
+                    memcpy(tmp, val, n);
+                    tmp[n] = 0;
+                    master_gain = (float)pow(10.0, atof(tmp) / 20.0);
+                }
+                else
+                {
+                    master_gain = (float)atof(val);
+                }
+            }
             else if (!strcmp(argv[i], "-st"))
             {
                 romset = ROM_SET_ST;
@@ -1446,12 +1481,16 @@ int main(int argc, char *argv[])
                 printf("  -p:<port_number>               Set MIDI port.\n");
                 printf("  -a:<device_number>             Set Audio Device index.\n");
                 printf("  -ab:<page_size>:[page_count]   Set Audio Buffer size.\n");
+                printf("  -gain:<amount>                 Set overall output volume: a linear multiplier\n"
+                       "                                 (e.g. 2 = double, 0.5 = half) or decibels (e.g.\n"
+                       "                                 6db = double, -6db = half). scale = 10^(db/20).\n");
                 printf("\n");
                 printf("  -mk2                           Use SC-55mk2 ROM set.\n");
                 printf("  -st                            Use SC-55st ROM set.\n");
                 printf("  -mk1                           Use SC-55mk1 ROM set.\n");
                 printf("  -cm300                         Use CM-300/SCC-1 ROM set.\n");
                 printf("  -jv880                         Use JV-880 ROM set.\n");
+                printf("  -float                          Pure-float resonant filter (per-add ±1.0 saturation), all ROM sets.\n");
                 printf("  -scb55                         Use SCB-55 ROM set.\n");
                 printf("  -rlp3237                       Use RLP-3237 ROM set.\n");
                 printf("\n");
@@ -1515,6 +1554,12 @@ int main(int argc, char *argv[])
         }
         printf("ROM set autodetect: %s\n", rs_name[romset]);
     }
+
+    if (pcm_float)
+        printf("Filter: running in float precision.\n");
+
+    if (master_gain != 1.0f)
+        printf("Output gain: %.3f\n", master_gain);
 
     mcu_mk1 = false;
     mcu_cm300 = false;

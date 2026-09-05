@@ -48,6 +48,8 @@ struct pcm_t {
     int accum_l;
     int accum_r;
     int rcsum[2];
+
+    float fstate[32][2]; // S1: float filter state (state1/state2), normalized ±1.0
 };
 
 extern pcm_t pcm;

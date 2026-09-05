@@ -287,6 +287,25 @@ inline int32_t multi(int32_t val1, int8_t val2)
     return val1;
 }
 
+// S1 float filter output: hard-clamp to ±1.0 (normalize domain) and truncate
+// back to 20-bit (truncate-toward-zero, like Roland's cvttss2si — NOT rounding).
+static inline int clamp20(float x)
+{
+    if (x > 1.0f)
+        x = 1.0f;
+    else if (x < -1.0f)
+        x = -1.0f;
+    return (int)(x * 524288.0f);
+}
+
+// S1 float filter saturation: clamp to ±1.0 (normalize domain). Per-add
+// saturation (mk1 semantics) in the float domain, tames the resonant ring-up
+// while keeping state in float (no 20-bit quantization).
+static inline float sats(float x)
+{
+    return x > 1.0f ? 1.0f : (x < -1.0f ? -1.0f : x);
+}
+
 static const int interp_lut[3][128] = {
     3385, 3401, 3417, 3432, 3448, 3463, 3478, 3492, 3506, 3521, 3535, 3548, 3562, 3575, 3588, 3601,
     3614, 3626, 3638, 3650, 3662, 3673, 3685, 3696, 3707, 3718, 3728, 3739, 3749, 3759, 3768, 3778,
@@ -1365,7 +1384,43 @@ void PCM_Update(uint64_t cycles)
             int filter = ram2[11];
             int v3;
 
-            if (mcu_mk1)
+            if (pcm_float)
+            {
+                // S1: pure-float resonant filter — wide dynamic range ("HDR"),
+                // hard-clamped to ±1.0, truncated back to 20-bit. State is kept in
+                // float (pcm.fstate) so the feedback loop never quantizes. The
+                // coefficient split mirrors mk2 exactly: g1 = A1/64 + A2/8192
+                // (state2/state1 feedback), g2 = B/64 (residual extra term only).
+                float A1 = (float)(int8_t)(filter >> 8);
+                float A2 = (float)((filter >> 1) & 127);
+                float Bc = (float)reg2_6;
+                const float g1 = A1 / 64.0f + A2 / 8192.0f;
+                const float g2 = Bc / 64.0f;
+
+                int tests = test;
+                tests <<= 12;
+                tests >>= 12; // sign-extend 20-bit -> 32-bit (as mk2)
+                float xf = (float)tests / 524288.0f; // normalize -> ±1.0
+
+                float f1 = pcm.fstate[slot][0]; // state1
+                float f2 = pcm.fstate[slot][1]; // state2
+
+                // State-II recurrence, same update order as mk2/mk1. Every stage
+                // is clamped to ±1.0 before feeding the next (mk1 per-add
+                // saturation, in the normalized domain) — the resonant ring-up
+                // stays bounded so the state never escapes full scale.
+                float state2_new = sats(f2 + f1 * g1);       // v1 (lowpass, no g2)
+                float subvar     = sats(state2_new + f1 * g2);
+                float out_v3     = sats(xf - subvar);        // residual
+                float state1_new = sats(f1 + out_v3 * g1);   // same g1
+
+                ram1[3] = (uint32_t)clamp20(state2_new); // lowpass -> 20-bit
+                v3 = clamp20(out_v3);                    // residual -> 20-bit
+
+                pcm.fstate[slot][0] = state1_new;
+                pcm.fstate[slot][1] = state2_new;
+            }
+            else if (mcu_mk1)
             {
                 int mult1 = multi(reg1, filter >> 8); // 8
                 int mult2 = multi(reg1, (filter >> 1) & 127); // 9
@@ -1542,6 +1597,8 @@ void PCM_Update(uint64_t cycles)
                     ram1[1] = 0;
                     ram1[3] = 0;
                     ram1[5] = 0;
+                    pcm.fstate[slot][0] = 0.0f;
+                    pcm.fstate[slot][1] = 0.0f;
                 }
 
                 ram2[8] = 0;
