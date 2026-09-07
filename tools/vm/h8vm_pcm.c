@@ -284,7 +284,6 @@ uint8_t PCMDev_Read(uint32_t address)
 #define vm_mcu_mk1 0
 #define vm_mcu_jv880 0
 #define vm_mcu_scb55 0
-static int pcm_float = 0;
 
 static void MCU_PostSample(int *sample)
 {
@@ -1393,43 +1392,7 @@ void PCMDev_Update(uint64_t cycles)
             int filter = ram2[11];
             int v3;
 
-            if (pcm_float)
-            {
-                float A1 = (float)(int8_t)(filter >> 8);
-                float A2 = (float)((filter >> 1) & 127);
-                float Bc = (float)reg2_6;
-                const float g1 = A1 / 64.0f + A2 / 8192.0f;
-                const float g2 = Bc / 64.0f;
-
-                int tests = test;
-                tests <<= 12;
-                tests >>= 12;
-                float xf = (float)tests / 524288.0f;
-
-                float f1 = pcmdev.fstate[slot][0];
-                float f2 = pcmdev.fstate[slot][1];
-
-                float state2_new = f2 + f1 * g1;
-                state2_new = state2_new > 1.0f ? 1.0f : (state2_new < -1.0f ? -1.0f : state2_new);
-                float subvar = state2_new + f1 * g2;
-                subvar = subvar > 1.0f ? 1.0f : (subvar < -1.0f ? -1.0f : subvar);
-                float out_v3 = xf - subvar;
-                out_v3 = out_v3 > 1.0f ? 1.0f : (out_v3 < -1.0f ? -1.0f : out_v3);
-                float state1_new = f1 + out_v3 * g1;
-                state1_new = state1_new > 1.0f ? 1.0f : (state1_new < -1.0f ? -1.0f : state1_new);
-
-                int c20;
-                if (state2_new > 1.0f) state2_new = 1.0f; else if (state2_new < -1.0f) state2_new = -1.0f;
-                c20 = (int)(state2_new * 524288.0f);
-                ram1[3] = (uint32_t)c20;
-
-                if (out_v3 > 1.0f) out_v3 = 1.0f; else if (out_v3 < -1.0f) out_v3 = -1.0f;
-                v3 = (int)(out_v3 * 524288.0f);
-
-                pcmdev.fstate[slot][0] = state1_new;
-                pcmdev.fstate[slot][1] = state2_new;
-            }
-            else if (vm_mcu_mk1)
+            if (vm_mcu_mk1)
             {
                 int mult1 = multi(reg1, filter >> 8); // 8
                 int mult2 = multi(reg1, (filter >> 1) & 127); // 9
@@ -1601,8 +1564,6 @@ void PCMDev_Update(uint64_t cycles)
                     ram1[1] = 0;
                     ram1[3] = 0;
                     ram1[5] = 0;
-                    pcmdev.fstate[slot][0] = 0.0f;
-                    pcmdev.fstate[slot][1] = 0.0f;
                 }
 
                 ram2[8] = 0;

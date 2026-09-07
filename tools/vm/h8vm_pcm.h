@@ -25,7 +25,6 @@ struct pcmdev_t {
     int accum_l;
     int accum_r;
     int rcsum[2];
-    float fstate[32][2];
 };
 typedef struct pcmdev_t pcmdev_t;
 
