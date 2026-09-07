@@ -82,3 +82,8 @@ CMakeSettings.json
 
 # Vendored assets packages shouldn't appear at the GIT history
 /assets/
+# keep the folders, ignore their contents except the tracked README note
+tools/python/*
+!tools/python/README.md
+tools/baselines/*
+!tools/baselines/README.md
