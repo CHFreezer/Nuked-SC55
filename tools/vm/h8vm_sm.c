@@ -2,6 +2,7 @@
 // 6502-style 8-bit CPU: reads MIDI from the shared UART buffer, processes it,
 // and communicates with the main MCU via sm_shared_ram / IPC / semaphore.
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "h8vm_sm.h"
 
@@ -73,17 +74,31 @@ uint32_t sm_uart_read_ptr;
 uint32_t sm_uart_write_ptr;
 
 // ---- coupling stubs to the main MCU ----
-static uint8_t mcu_p1_data;
-static uint8_t mcu_p0_data;
-uint8_t MCU_ReadP1(void) { (void)mcu_p1_data; return 0xff; }
+uint8_t mcu_p1_data;
+uint8_t mcu_p0_data;
+static uint32_t vm_button_pressed = 0;
+
+void VM_SetButtons(uint32_t mask) { vm_button_pressed = mask; }
+
+// P1 data: bit N of mcu_p0_data == 0 selects the 8-button group N (active-low samples).
+uint8_t MCU_ReadP1(void)
+{
+    uint8_t data = 0xff;
+    uint32_t b = vm_button_pressed;
+    if ((mcu_p0_data & 1) == 0) data &= ((b >> 0) & 255) ^ 255;
+    if ((mcu_p0_data & 2) == 0) data &= ((b >> 8) & 255) ^ 255;
+    if ((mcu_p0_data & 4) == 0) data &= ((b >> 16) & 255) ^ 255;
+    if ((mcu_p0_data & 8) == 0) data &= ((b >> 24) & 255) ^ 255;
+    return data;
+}
 void MCU_WriteP1(uint8_t data) { mcu_p1_data = data; }
-uint8_t MCU_ReadP0(void) { (void)mcu_p0_data; return 0xff; }
+uint8_t MCU_ReadP0(void) { (void)mcu_p1_data; return 0xff; }
 void MCU_WriteP0(uint8_t data) { mcu_p0_data = data; }
 
 // GA (general-purpose) interrupt lines -> main MCU IRQ1 (non-jv880).
-static int ga_int[8];
-static int ga_int_enable = 255;
-static int ga_int_trigger = 0;
+int ga_int[8];
+int ga_int_enable = 255;
+int ga_int_trigger = 0;
 void MCU_GA_SetGAInt(int line, int value)
 {
     if (value && !ga_int[line] && (ga_int_enable & (1 << line)) != 0)
@@ -1404,6 +1419,9 @@ void SM_UpdateUART(void)
     uart_rx_delay = sm.cycles + 3000 * 4;
 }
 
+// The SM is asynchronous (5x the main rate, 48 sm-cycles/instr), so per-main-
+// cycle sampling of sm.pc misses instructions. Logging inside SM_Update (via the
+// main-MCU-owned trace_write) captures every instruction with its sm-cycle.
 void SM_Update(uint64_t cycles)
 {
     while (sm.cycles < cycles * 5)
@@ -1412,6 +1430,8 @@ void SM_Update(uint64_t cycles)
 
         if (!sm.sleep)
         {
+            trace_write(1, sm.cycles, sm.pc);
+            log_sm_instr(sm.cycles, sm.pc);
             uint8_t opcode = SM_ReadAdvance();
 
             SM_Opcode_Table[opcode](opcode);

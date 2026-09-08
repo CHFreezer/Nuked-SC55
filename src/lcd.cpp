@@ -41,6 +41,44 @@ void LCD_Enable(uint32_t enable)
     lcd_enable = enable;
 }
 
+void LCD_StateSave(FILE *f)
+{
+    fwrite(&LCD_DL, sizeof LCD_DL, 1, f);
+    fwrite(&LCD_N, sizeof LCD_N, 1, f);
+    fwrite(&LCD_F, sizeof LCD_F, 1, f);
+    fwrite(&LCD_D, sizeof LCD_D, 1, f);
+    fwrite(&LCD_C, sizeof LCD_C, 1, f);
+    fwrite(&LCD_B, sizeof LCD_B, 1, f);
+    fwrite(&LCD_ID, sizeof LCD_ID, 1, f);
+    fwrite(&LCD_S, sizeof LCD_S, 1, f);
+    fwrite(&LCD_DD_RAM, sizeof LCD_DD_RAM, 1, f);
+    fwrite(&LCD_AC, sizeof LCD_AC, 1, f);
+    fwrite(&LCD_CG_RAM, sizeof LCD_CG_RAM, 1, f);
+    fwrite(&LCD_RAM_MODE, sizeof LCD_RAM_MODE, 1, f);
+    fwrite(LCD_Data, sizeof LCD_Data, 1, f);
+    fwrite(LCD_CG, sizeof LCD_CG, 1, f);
+    fwrite(&lcd_enable, sizeof lcd_enable, 1, f);
+}
+
+void LCD_StateLoad(FILE *f)
+{
+    fread(&LCD_DL, sizeof LCD_DL, 1, f);
+    fread(&LCD_N, sizeof LCD_N, 1, f);
+    fread(&LCD_F, sizeof LCD_F, 1, f);
+    fread(&LCD_D, sizeof LCD_D, 1, f);
+    fread(&LCD_C, sizeof LCD_C, 1, f);
+    fread(&LCD_B, sizeof LCD_B, 1, f);
+    fread(&LCD_ID, sizeof LCD_ID, 1, f);
+    fread(&LCD_S, sizeof LCD_S, 1, f);
+    fread(&LCD_DD_RAM, sizeof LCD_DD_RAM, 1, f);
+    fread(&LCD_AC, sizeof LCD_AC, 1, f);
+    fread(&LCD_CG_RAM, sizeof LCD_CG_RAM, 1, f);
+    fread(&LCD_RAM_MODE, sizeof LCD_RAM_MODE, 1, f);
+    fread(LCD_Data, sizeof LCD_Data, 1, f);
+    fread(LCD_CG, sizeof LCD_CG, 1, f);
+    fread(&lcd_enable, sizeof lcd_enable, 1, f);
+}
+
 bool LCD_QuitRequested()
 {
     return lcd_quit_requested;

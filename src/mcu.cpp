@@ -36,6 +36,43 @@
 #include <limits.h>
 #endif
 
+extern frt_t frt[3];
+extern mcu_timer_t timer;
+extern uint64_t timer_cycles;
+extern uint8_t timer_tempreg;
+
+// Set to 1 to enable trace/observation logging (slows the emulator down).
+#define SC55_TRACE 0
+
+#if SC55_TRACE
+static char frt_state_prev[512];
+static void frt_state_log(void)
+{
+    char buf[512];
+    int pbits = 0;
+    for (int i = 0; i < INTERRUPT_SOURCE_MAX; i++)
+        if (mcu.interrupt_pending[i])
+            pbits |= (1 << i);
+    int n = snprintf(buf, sizeof buf, "c%llu f0=%02x%02x%04x%04x%04x f1=%02x%02x%04x%04x%04x f2=%02x%02x%04x%04x%04x t=%02x%02x%02x sr=%04x p=%05x\n",
+        (unsigned long long)mcu.cycles,
+        frt[0].tcr, frt[0].tcsr, frt[0].frc, frt[0].ocra, frt[0].ocrb,
+        frt[1].tcr, frt[1].tcsr, frt[1].frc, frt[1].ocra, frt[1].ocrb,
+        frt[2].tcr, frt[2].tcsr, frt[2].frc, frt[2].ocra, frt[2].ocrb,
+        timer.tcr, timer.tcsr, timer.tcnt, mcu.sr, (unsigned)pbits);
+    if (strcmp(buf, frt_state_prev) != 0)
+    {
+        strcpy(frt_state_prev, buf);
+        static FILE *f = nullptr;
+        if (!f) f = fopen("frtstate_orig.log", "a");
+        if (f)
+        {
+            fwrite(buf, 1, (size_t)n, f);
+            fflush(f);
+        }
+    }
+}
+#endif
+
 const char* rs_name[ROM_SET_COUNT] = {
     "SC-55mk2",
     "SC-55st",
@@ -165,6 +202,44 @@ static uint8_t io_sd = 0x00;
 
 SDL_atomic_t mcu_button_pressed = { 0 };
 
+// SC-55mk2 built-in demo key sequence (-demo):
+// Q (power on) -> hold RT (Part< + Part>) -> Q again (power cycle with RT held)
+// -> release all -> W (INST_ALL) starts the demo song.
+static bool demo_seq_enabled = false;
+
+// (-mocknote): post a MIDI note-on (0x90, note 60, vel 100) into the shared UART
+// so the SM's UART RX path runs without a MIDI device. Off by default. Fired at
+// 144M cycles (6s) to align with the -demo key sequence start: the LCD splash
+// animation takes ~5s and no sound is output until it finishes, so a reset-time
+// note would be lost. Only effective in from-reset runs (a -loadsnap overwrites
+// the buffer; the timer restarts from the loaded cycles).
+static bool mocknote_enabled = false;
+static bool mocknote_done = false;
+
+// (-tracepc <file> [start end]): log a unified main+SM PC trace for every
+// instruction in the [start,end) window (default 200M..210M), to verify
+// per-cycle PC parity between runs. One file; main lines are "m <cycles>
+// <cp:pc>", SM lines are "s <sm_cycles> <pc>".
+static bool tracepc_enabled = false;
+static const char *tracepc_file = nullptr;
+static uint64_t tracepc_start = 200000000, tracepc_end = 210000000;
+
+// ---- unified PC trace (main + SM in ONE file), owned by the main MCU. ----
+// type 0 (main): "m <mcu_cycles> <cp:pc>"; type 1 (SM): "s <sm_cycles> <pc>".
+// The work thread opens/closes the file on the tracepc window; the SM calls
+// trace_write() for every non-sleep instruction (no-ops when the file is closed).
+static FILE *g_trace_f = nullptr;
+static char *g_trace_buf = nullptr;
+static bool g_trace_closed = false;
+void trace_write(uint8_t type, uint64_t cycle, uint32_t value)
+{
+    if (!g_trace_f) return;
+    if (type == 0)
+        fprintf(g_trace_f, "m %llu %02x:%04x\n", (unsigned long long)cycle, (unsigned)((value >> 16) & 0xff), (unsigned)(value & 0xffff));
+    else
+        fprintf(g_trace_f, "s %llu %04x\n", (unsigned long long)cycle, (unsigned)(value & 0xffff));
+}
+
 uint8_t RCU_Read(void)
 {
     return 0;
@@ -273,6 +348,18 @@ void MCU_AnalogSample(int channel)
 {
     int value = MCU_AnalogReadPin(channel);
     int dest = (channel << 1) & 6;
+#if SC55_TRACE
+    {
+        static FILE *af = nullptr;
+        if (!af) af = fopen("analog_orig.log", "a");
+        if (af)
+        {
+            fprintf(af, "c%llu ch%d dest%d value=%04x io_sd=%02x sw_pos=%d adcsr=%02x\n",
+                (unsigned long long)mcu.cycles, channel, dest, value, io_sd, sw_pos, dev_register[DEV_ADCSR]);
+            fflush(af);
+        }
+    }
+#endif
     dev_register[DEV_ADDRAH + dest] = value >> 2;
     dev_register[DEV_ADDRAL + dest] = (value << 6) & 0xc0;
 }
@@ -546,7 +633,7 @@ uint8_t cardram[CARDRAM_SIZE];
 
 int rom2_mask = ROM2_SIZE - 1;
 
-uint8_t MCU_Read(uint32_t address)
+static uint8_t MCU_Read_impl(uint32_t address)
 {
     uint32_t address_rom = address & 0x3ffff;
     if (address & 0x80000 && !mcu_jv880)
@@ -728,6 +815,24 @@ uint8_t MCU_Read(uint32_t address)
     return ret;
 }
 
+uint8_t MCU_Read(uint32_t address)
+{
+    uint8_t v = MCU_Read_impl(address);
+#if SC55_TRACE
+    {
+        static FILE *rf = nullptr;
+        static long rc = 0;
+        if (rc < 3000000)
+        {
+            if (!rf) rf = fopen("read_orig.log", "a");
+            if (rf) fprintf(rf, "rc%ld c%llu addr=%08x val=%02x pc=%04x:%04x\n", rc, (unsigned long long)mcu.cycles, (unsigned)address, (int)v, (int)mcu.cp, (int)mcu.pc);
+            rc++;
+        }
+    }
+#endif
+    return v;
+}
+
 uint16_t MCU_Read16(uint32_t address)
 {
     address &= ~1;
@@ -802,7 +907,21 @@ void MCU_Write(uint32_t address, uint8_t value)
                 }
                 else if (address >= 0x8000 && address < 0xe000)
                 {
-                    sram[address & 0x7fff] = value;
+                    uint32_t sa = address & 0x7fff;
+#if SC55_TRACE
+                    if (sa >= 0x5c00 && sa < 0x5d30)
+                    {
+                        static FILE *wf = nullptr;
+                        static long wc = 0;
+                        if (!wf) wf = fopen("sramw_orig.log", "a");
+                        if (wf)
+                        {
+                            fprintf(wf, "off=%04x val=%02x pc=%04x:%04x step%ld\n",
+                                    (int)sa, (int)value, (int)mcu.cp, (int)mcu.pc, wc++);
+                        }
+                    }
+#endif
+                    sram[sa] = value;
                 }
                 else
                 {
@@ -1000,11 +1119,146 @@ void MCU_WorkThread_Unlock(void)
     SDL_UnlockMutex(work_thread_lock);
 }
 
+// ---- TEMP OBSERVATION (remove later) ----
+#if SC55_TRACE
+extern uint8_t sm_device_mode[32];
+static FILE* obs_f = nullptr;
+static long obs_step = 0;
+static uint32_t last_main_pc = 0;
+static void obs_dump_state(const char* why)
+{
+    if (!obs_f) { obs_f = fopen("obs.log", "w"); if (!obs_f) return; }
+    fprintf(obs_f, "%s main pc=%02x:%04x sr=%04x irq0=%d irq1=%d ga_trig=%d | sm pc=%04x sleep=%d sr=%02x intreq=%02x u1ctrl=%02x u2ctrl=%02x u1ms=%02x sem=%02x cycles=%llu\n",
+        why, mcu.cp, mcu.pc, mcu.sr,
+        mcu.interrupt_pending[1], mcu.interrupt_pending[2], ga_int_trigger,
+        sm.pc, sm.sleep, sm.sr, sm_device_mode[0x1c],
+        sm_device_mode[0x06], sm_device_mode[0x0a],
+        sm_device_mode[0x05], sm_device_mode[0x19],
+        (unsigned long long)mcu.cycles);
+    fflush(obs_f);
+}
+#endif // SC55_TRACE
+// ---- END TEMP OBSERVATION ----
+
+// ---- full state snapshot: -savesnap <cycles> / -loadsnap <file> ----
+// -savesnap dumps the full state to demo_snap.bin at <cycles>; -loadsnap loads
+// a snapshot file at the start (ex- -demo2), so a keyless run starts from the
+// exact captured state (e.g. demo_postW.bin, mid-demo, W released).
+extern uint8_t mcu_p0_data, mcu_p1_data;
+extern uint8_t sm_ram[128];
+extern uint8_t sm_shared_ram[192];
+extern uint8_t sm_access[0x18];
+extern uint8_t sm_p0_dir, sm_p1_dir, sm_cts;
+extern uint8_t sm_device_mode[32];
+extern uint64_t sm_timer_cycles;
+extern uint8_t sm_timer_prescaler, sm_timer_counter;
+
+static uint64_t snap_dump_at = 0;
+static const char *snap_load_file = nullptr;
+static int snap_done = 0;
+
+static void state_save(FILE *f)
+{
+    fwrite(&mcu, sizeof mcu, 1, f);
+    fwrite(ram, RAM_SIZE, 1, f);
+    fwrite(sram, SRAM_SIZE, 1, f);
+    fwrite(dev_register, sizeof dev_register, 1, f);
+    fwrite(frt, sizeof frt, 1, f);
+    fwrite(&timer, sizeof timer, 1, f);
+    fwrite(&timer_cycles, sizeof timer_cycles, 1, f);
+    fwrite(&timer_tempreg, sizeof timer_tempreg, 1, f);
+    fwrite(&mcu_p0_data, 1, 1, f);
+    fwrite(&mcu_p1_data, 1, 1, f);
+    fwrite(&io_sd, 1, 1, f);
+    fwrite(&sw_pos, 1, 1, f);
+    fwrite(ad_val, sizeof ad_val, 1, f);
+    fwrite(&ad_nibble, 1, 1, f);
+    fwrite(ga_int, sizeof ga_int, 1, f);
+    fwrite(&ga_int_enable, 4, 1, f);
+    fwrite(&ga_int_trigger, 4, 1, f);
+    fwrite(&ga_lcd_counter, 4, 1, f);
+    fwrite(&analog_end_time, sizeof analog_end_time, 1, f);
+    fwrite(uart_buffer, uart_buffer_size, 1, f);
+    fwrite(&uart_write_ptr, 4, 1, f);
+    fwrite(&uart_read_ptr, 4, 1, f);
+    fwrite(&uart_rx_byte, 1, 1, f);
+    fwrite(&sm, sizeof sm, 1, f);
+    fwrite(sm_ram, sizeof sm_ram, 1, f);
+    fwrite(sm_shared_ram, sizeof sm_shared_ram, 1, f);
+    fwrite(sm_access, sizeof sm_access, 1, f);
+    fwrite(&sm_p0_dir, 1, 1, f);
+    fwrite(&sm_p1_dir, 1, 1, f);
+    fwrite(sm_device_mode, sizeof sm_device_mode, 1, f);
+    fwrite(&sm_cts, 1, 1, f);
+    fwrite(&sm_timer_cycles, sizeof sm_timer_cycles, 1, f);
+    fwrite(&sm_timer_prescaler, 1, 1, f);
+    fwrite(&sm_timer_counter, 1, 1, f);
+    fwrite(&pcm, sizeof pcm, 1, f);
+    LCD_StateSave(f);
+}
+
+static void state_load(FILE *f)
+{
+    fread(&mcu, sizeof mcu, 1, f);
+    fread(ram, RAM_SIZE, 1, f);
+    fread(sram, SRAM_SIZE, 1, f);
+    fread(dev_register, sizeof dev_register, 1, f);
+    fread(frt, sizeof frt, 1, f);
+    fread(&timer, sizeof timer, 1, f);
+    fread(&timer_cycles, sizeof timer_cycles, 1, f);
+    fread(&timer_tempreg, sizeof timer_tempreg, 1, f);
+    fread(&mcu_p0_data, 1, 1, f);
+    fread(&mcu_p1_data, 1, 1, f);
+    fread(&io_sd, 1, 1, f);
+    fread(&sw_pos, 1, 1, f);
+    fread(ad_val, sizeof ad_val, 1, f);
+    fread(&ad_nibble, 1, 1, f);
+    fread(ga_int, sizeof ga_int, 1, f);
+    fread(&ga_int_enable, 4, 1, f);
+    fread(&ga_int_trigger, 4, 1, f);
+    fread(&ga_lcd_counter, 4, 1, f);
+    fread(&analog_end_time, sizeof analog_end_time, 1, f);
+    fread(uart_buffer, uart_buffer_size, 1, f);
+    fread(&uart_write_ptr, 4, 1, f);
+    fread(&uart_read_ptr, 4, 1, f);
+    fread(&uart_rx_byte, 1, 1, f);
+    fread(&sm, sizeof sm, 1, f);
+    fread(sm_ram, sizeof sm_ram, 1, f);
+    fread(sm_shared_ram, sizeof sm_shared_ram, 1, f);
+    fread(sm_access, sizeof sm_access, 1, f);
+    fread(&sm_p0_dir, 1, 1, f);
+    fread(&sm_p1_dir, 1, 1, f);
+    fread(sm_device_mode, sizeof sm_device_mode, 1, f);
+    fread(&sm_cts, 1, 1, f);
+    fread(&sm_timer_cycles, sizeof sm_timer_cycles, 1, f);
+    fread(&sm_timer_prescaler, 1, 1, f);
+    fread(&sm_timer_counter, 1, 1, f);
+    fread(&pcm, sizeof pcm, 1, f);
+    LCD_StateLoad(f);
+}
+
 int SDLCALL work_thread(void* data)
 {
     work_thread_lock = SDL_CreateMutex();
 
     MCU_WorkThread_Lock();
+
+    // ---- -loadsnap <file>: load the full machine state at the start (like the
+    // old -demo2, but with a user-specified filename), so a keyless run starts
+    // from the exact captured state (e.g. demo_postW.bin, mid-demo, W released). ----
+    if (snap_load_file)
+    {
+        FILE *f = fopen(snap_load_file, "rb");
+        if (f)
+        {
+            state_load(f);
+            fclose(f);
+            printf("loadsnap: loaded state from %s at c%llu\n", snap_load_file, (unsigned long long)mcu.cycles);
+        }
+        else
+            printf("loadsnap: missing %s\n", snap_load_file);
+    }
+
     while (work_thread_run)
     {
         if (pcm.config_reg_3c & 0x40)
@@ -1031,6 +1285,82 @@ int SDLCALL work_thread(void* data)
 
         mcu.cycles += 12; // FIXME: assume 12 cycles per instruction
 
+        // ---- unified main+SM PC trace ([tracepc_start, tracepc_end) window) ----
+        if (tracepc_enabled)
+        {
+            if (mcu.cycles >= tracepc_start && mcu.cycles < tracepc_end)
+            {
+                if (!g_trace_f && !g_trace_closed)
+                {
+                    g_trace_f = fopen(tracepc_file, "w");
+                    if (g_trace_f) { g_trace_buf = (char *)malloc(1 << 20); setvbuf(g_trace_f, g_trace_buf, _IOFBF, 1 << 20); }
+                }
+                trace_write(0, mcu.cycles, ((uint32_t)mcu.cp << 16) | mcu.pc);
+            }
+            else if (mcu.cycles >= tracepc_end && g_trace_f && !g_trace_closed)
+            {
+                fflush(g_trace_f);
+                fclose(g_trace_f);
+                g_trace_f = nullptr;
+                g_trace_closed = true;
+            }
+        }
+
+        // ---- demo key sequence (SC-55mk2 built-in demo, -demo) ----
+        if (demo_seq_enabled)
+        {
+            // Start 6s after boot: the LCD splash animation must finish first.
+            // Each key state is held 250ms (6M cycles @ 24MHz) so the firmware's
+            // debounce logic sees real key presses. The second power-on has no
+            // boot animation, so W can be pressed at 8s.
+            static const uint64_t demo_dt[7] = { 144000000, 150000000, 156000000, 162000000, 168000000, 192000000, 198000000 };
+            static const uint32_t demo_mask[7] = {
+                1u << MCU_BUTTON_POWER,
+                (1u << MCU_BUTTON_PART_L) | (1u << MCU_BUTTON_PART_R),
+                (1u << MCU_BUTTON_PART_L) | (1u << MCU_BUTTON_PART_R),
+                (1u << MCU_BUTTON_POWER) | (1u << MCU_BUTTON_PART_L) | (1u << MCU_BUTTON_PART_R),
+                0,
+                1u << MCU_BUTTON_INST_ALL,
+                0,
+            };
+            static int demo_step = 0;
+            static uint64_t demo_elapsed = 0;
+            demo_elapsed += 12;
+            while (demo_step < 7 && demo_elapsed >= demo_dt[demo_step])
+            {
+                SDL_AtomicSet(&mcu_button_pressed, (int)demo_mask[demo_step]);
+                printf("demo: step%d mask=%08x\n", demo_step, demo_mask[demo_step]);
+                demo_step++;
+            }
+        }
+
+        // ---- mock note-on (-mocknote): fire at 6s, aligned with the demo start ----
+        // The LCD splash animation takes ~5s and no sound is output until it
+        // finishes, so the note is posted after it (144M cycles = 6s), matching
+        // the demo's first key event.
+        if (mocknote_enabled && !mocknote_done && mcu.cycles >= 144000000ull)
+        {
+            SM_PostUART(0x90);
+            SM_PostUART(60);
+            SM_PostUART(100);
+            mocknote_done = true;
+            printf("mocknote: posted note-on at c%llu\n", (unsigned long long)mcu.cycles);
+        }
+
+        // ---- snapshot dump trigger (-savesnap <cycles>) ----
+        if (!snap_done && snap_dump_at && mcu.cycles >= snap_dump_at)
+        {
+            FILE *f = fopen("demo_snap.bin", "wb");
+            if (f)
+            {
+                state_save(f);
+                printf("snap: dumped full state at c%llu\n", (unsigned long long)mcu.cycles);
+                fflush(stdout);
+                fclose(f);
+            }
+            snap_done = 1;
+        }
+
         // if (mcu.cycles % 24000000 == 0)
         //     printf("seconds: %i\n", (int)(mcu.cycles / 24000000));
 
@@ -1048,6 +1378,60 @@ int SDLCALL work_thread(void* data)
 
         MCU_UpdateAnalog(mcu.cycles);
 
+#if SC55_TRACE
+        frt_state_log();
+#endif
+
+        // ---- TEMP OBSERVATION ----
+#if SC55_TRACE
+        {
+            uint32_t cur_pc = ((uint32_t)mcu.cp << 16) | mcu.pc;
+            uint32_t prev_pc = last_main_pc;
+            if (cur_pc == 0x007c3f && cur_pc != last_main_pc)
+            {
+                static long st_n2 = 0;
+                if (st_n2 < 32)
+                {
+                    static FILE *rm2 = nullptr;
+                    if (!rm2) rm2 = fopen("ram_orig.log", "a");
+                    if (rm2)
+                    {
+                        fprintf(rm2, "=== burst%ld ===\n", st_n2);
+                        for (int b = 0; b < 0x8000; b += 16)
+                        {
+                            for (int k = 0; k < 16; k++)
+                                fprintf(rm2, "%02x", sram[b + k]);
+                            fprintf(rm2, "\n");
+                        }
+                        fflush(rm2);
+                    }
+                    st_n2++;
+                }
+            }
+            if (cur_pc != last_main_pc)
+            {
+                last_main_pc = cur_pc;
+                obs_dump_state("pcchg");
+                if (prev_pc == 0x007c3f)
+                {
+                    static FILE* st_f = nullptr;
+                    static long st_n = 0;
+                    if (!st_f) st_f = fopen("stack_orig.log", "w");
+                    if (st_f)
+                    {
+                        fprintf(st_f, "burst%ld r7=%04x postpop: ", st_n++, mcu.r[7]);
+                        for (int s = 0; s < 16; s++)
+                            fprintf(st_f, "%02x%02x ", sram[(mcu.r[7] + s * 2) & 0x7fff], sram[(mcu.r[7] + s * 2 + 1) & 0x7fff]);
+                        fprintf(st_f, "\n");
+                        fflush(st_f);
+                    }
+
+                }
+            }
+        }
+#endif // SC55_TRACE
+        // ---- END TEMP ----
+
         if (mcu_mk1)
         {
             if (ga_lcd_counter)
@@ -1061,6 +1445,8 @@ int SDLCALL work_thread(void* data)
             }
         }
     }
+    if (g_trace_f) { fflush(g_trace_f); fclose(g_trace_f); }
+    free(g_trace_buf);
     MCU_WorkThread_Unlock();
 
     SDL_DestroyMutex(work_thread_lock);
@@ -1411,6 +1797,31 @@ int main(int argc, char *argv[])
             {
                 pcm_float = 1;
             }
+            else if (!strcmp(argv[i], "-demo"))
+            {
+                demo_seq_enabled = true;
+            }
+            else if (!strcmp(argv[i], "-mocknote"))
+            {
+                mocknote_enabled = true;
+            }
+            else if (!strcmp(argv[i], "-tracepc") && i + 1 < argc)
+            {
+                tracepc_enabled = true;
+                tracepc_file = argv[++i];
+                if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9')
+                    tracepc_start = strtoull(argv[++i], 0, 10);
+                if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9')
+                    tracepc_end = strtoull(argv[++i], 0, 10);
+            }
+            else if (!strcmp(argv[i], "-savesnap") && i + 1 < argc)
+            {
+                snap_dump_at = strtoull(argv[++i], 0, 10);
+            }
+            else if (!strcmp(argv[i], "-loadsnap") && i + 1 < argc)
+            {
+                snap_load_file = argv[++i];
+            }
             else if (!strncmp(argv[i], "-gain:", 6))
             {
                 // "<number>" = linear multiplier; "<number>db" = decibels,
@@ -1475,27 +1886,47 @@ int main(int argc, char *argv[])
             {
                 // TODO: Might want to try to find a way to print out the executable's actual name (without any full paths).
                 printf("Usage: nuked-sc55 [options]\n");
-                printf("Options:\n");
+                printf("\n");
                 printf("  -h, -help, --help              Display this information.\n");
                 printf("\n");
+                printf("MIDI / audio:\n");
                 printf("  -p:<port_number>               Set MIDI port.\n");
                 printf("  -a:<device_number>             Set Audio Device index.\n");
                 printf("  -ab:<page_size>:[page_count]   Set Audio Buffer size.\n");
                 printf("  -gain:<amount>                 Set overall output volume: a linear multiplier\n"
                        "                                 (e.g. 2 = double, 0.5 = half) or decibels (e.g.\n"
                        "                                 6db = double, -6db = half). scale = 10^(db/20).\n");
+                printf("  -float                         Pure-float resonant filter (per-add ±1.0\n"
+                       "                                 saturation), all ROM sets.\n");
                 printf("\n");
+                printf("ROM set:\n");
                 printf("  -mk2                           Use SC-55mk2 ROM set.\n");
-                printf("  -st                            Use SC-55st ROM set.\n");
                 printf("  -mk1                           Use SC-55mk1 ROM set.\n");
+                printf("  -st                            Use SC-55st ROM set.\n");
                 printf("  -cm300                         Use CM-300/SCC-1 ROM set.\n");
                 printf("  -jv880                         Use JV-880 ROM set.\n");
-                printf("  -float                          Pure-float resonant filter (per-add ±1.0 saturation), all ROM sets.\n");
                 printf("  -scb55                         Use SCB-55 ROM set.\n");
                 printf("  -rlp3237                       Use RLP-3237 ROM set.\n");
+                printf("  -sc155                         Use SC-155 ROM set.\n");
+                printf("  -sc155mk2                      Use SC-155mk2 ROM set.\n");
                 printf("\n");
+                printf("Reset mode:\n");
                 printf("  -gs                            Reset system in GS mode.\n");
                 printf("  -gm                            Reset system in GM mode.\n");
+                printf("\n");
+                printf("Test / verification (for VM cross-checks):\n");
+                printf("  -demo                          Apply the built-in demo key sequence (starts\n"
+                       "                                 ~6s after boot, after the LCD splash animation).\n");
+                printf("  -mocknote                      Post a MIDI note-on (0x90, note 60, vel 100)\n"
+                       "                                 at 144M cycles (6s), aligned with the -demo\n"
+                       "                                 start, to exercise the SM UART RX path without a\n"
+                       "                                 MIDI device.\n");
+                printf("  -tracepc <file> [start end]    Log a unified main+SM PC trace to <file> for the\n"
+                       "                                 [start, end) cycle window (default 200M..210M).\n");
+                printf("  -savesnap <cycles>             Dump the full machine state to demo_snap.bin at\n"
+                       "                                 <cycles>.\n");
+                printf("  -loadsnap <file>               Load the full machine state from <file> at start\n"
+                       "                                 (a keyless run starts from the exact saved state).\n");
                 return 0;
             }
             else if (!strcmp(argv[i], "-sc155"))
@@ -1791,7 +2222,7 @@ int main(int argc, char *argv[])
     PCM_Reset();
 
     if (resetType != ResetType::NONE) MIDI_Reset(resetType);
-    
+
     MCU_Run();
 
     MCU_CloseAudio();

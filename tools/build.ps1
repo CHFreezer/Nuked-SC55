@@ -6,7 +6,7 @@ if (-not (Test-Path $clang)) { $clang = "clang" }
 
 $targets = @(
     @{ Out = "vm\h8vm.exe";         Src = @("vm\h8vm_main.c", "vm\h8vm_body.c", "vm\h8vm_sm.c", "vm\h8vm_pcm.c") },
-    @{ Out = "disasm\h8dasm2.exe";  Src = @("disasm\h8dasm2.c") },
+    @{ Out = "disasm\h8dasm.exe";  Src = @("disasm\h8dasm.c") },
     @{ Out = "diff\extract_pc.exe"; Src = @("diff\extract_pc.c") },
     @{ Out = "diff\extract_flow.exe"; Src = @("diff\extract_flow.c") },
     @{ Out = "diff\pcdiff.exe";     Src = @("diff\pcdiff.c") },

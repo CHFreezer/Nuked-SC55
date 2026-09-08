@@ -45,6 +45,11 @@ extern uint8_t sm_rom[4096];
 
 void SM_Reset(void);
 void SM_Update(uint64_t cycles);
+
+// Unified PC trace (main + SM in one file), owned by the main MCU. The SM calls
+// this for every non-sleep instruction: type 1 -> "s <sm_cycles> <pc>".
+// (type 0 -> "m <mcu_cycles> <cp:pc>" is used by the main work thread.)
+void trace_write(uint8_t type, uint64_t cycle, uint32_t value);
 void SM_SysWrite(uint32_t address, uint8_t data);
 uint8_t SM_SysRead(uint32_t address);
 void SM_PostUART(uint8_t data);

@@ -15,6 +15,7 @@
  *
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "SDL_audio.h"
 #include "mcu.h"
@@ -1383,6 +1384,12 @@ void SM_UpdateTimer(void)
     }
 }
 
+void SM_PostUART(uint8_t data)
+{
+    uart_buffer[uart_write_ptr] = data;
+    uart_write_ptr = (uart_write_ptr + 1) % uart_buffer_size;
+}
+
 void SM_UpdateUART(void)
 {
     if ((sm_device_mode[SM_DEV_UART1_CTRL] & 4) == 0) // RX disabled
@@ -1404,6 +1411,9 @@ void SM_UpdateUART(void)
     uart_rx_delay = sm.cycles + 3000 * 4;
 }
 
+// The SM is asynchronous (5x the main rate, 48 sm-cycles/instr), so per-main-
+// cycle sampling of sm.pc misses instructions. Logging inside SM_Update (via the
+// main-MCU-owned trace_write) captures every instruction with its sm-cycle.
 void SM_Update(uint64_t cycles)
 {
     while (sm.cycles < cycles * 5)
@@ -1412,13 +1422,14 @@ void SM_Update(uint64_t cycles)
 
         if (!sm.sleep)
         {
+            trace_write(1, sm.cycles, sm.pc);
             uint8_t opcode = SM_ReadAdvance();
 
             SM_Opcode_Table[opcode](opcode);
         }
 
         sm.cycles += 12 * 4; // FIXME
-        
+
         SM_UpdateTimer();
         SM_UpdateUART();
     }

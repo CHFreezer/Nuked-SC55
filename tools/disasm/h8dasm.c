@@ -6,8 +6,8 @@
 //   page 0, off < 0x8000        -> rom1[off]
 //   else: idx = addr & 0x3ffff; if (addr & 0x80000) idx |= 0x40000; -> rom2[idx]
 //
-// Build:  clang -O2 -o h8dasm2.exe h8dasm2.c
-// Usage:  h8dasm2.exe rom1.bin rom2.bin pc_main.txt flow_main.txt out.txt
+// Build:  clang -O2 -o h8dasm.exe h8dasm.c
+// Usage:  h8dasm.exe rom1.bin rom2.bin pc_main.txt flow_main.txt out.txt
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -97,11 +97,17 @@ static void decode(int page, int off, dec_t *d) {
         int ocode,ore,ext=0;
         if (opcode==0x00){ int e=rbyte(page,o); ADV(1); ore=e&7; ocode=e>>3; ext=1; }
         else { ocode=opcode>>3; ore=opcode&7; }
+        // 源操作数格式，逐模式对齐 VM 的 MCU_Operand_General（h8vm_body.c:541）
         char srcs[32];
-        if (top==0xe0||top==0xf0) sprintf(srcs,"@r6+%d",disp);
-        else if (top==0x00 && reg==5) sprintf(srcs,"(br,$%02x)",disp&0xff);
-        else if (top==0x00 && reg==4) sprintf(srcs,"#%02x",disp&0xff);
-        else if (top==0x10 && reg==5) sprintf(srcs,"(dp,$%02x)",disp&0xff);
+        if (top==0xa0) sprintf(srcs,"r%d",reg);                          // 直接 r[reg]
+        else if (top==0xb0) sprintf(srcs,"--r%d",reg);                    // 预减址 @r[reg]--
+        else if (top==0xc0) sprintf(srcs,"r%d++",reg);                    // 后增址 @r[reg]++
+        else if (top==0xd0) sprintf(srcs,"@r%d",reg);                     // 间接 @r[reg]
+        else if (top==0xe0) sprintf(srcs,"@r%d+%d",reg,disp);             // 间接+8位有符号位移
+        else if (top==0xf0) sprintf(srcs,"@r%d+0x%04x",reg,disp&0xffff);  // 间接+16位移位
+        else if (top==0x00 && reg==5) sprintf(srcs,"(br,$%02x)",disp&0xff); // 绝对 (BR 页)
+        else if (top==0x00 && reg==4) sprintf(srcs,(siz)?"#0x%04x":"#0x%02x",disp); // 立即数
+        else if (top==0x10 && reg==5) sprintf(srcs,"(dp,0x%04x)",disp&0xffff);     // 绝对 (DP 页)
         else sprintf(srcs,"?");
         fmt(d,"%s %s r%d%s",OPC_NAME[ocode&31],srcs,ore,ext?" x":"");
         FINISH;
@@ -139,7 +145,7 @@ static void addline(int addr, const char *buf) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 6) { fprintf(stderr, "usage: h8dasm2 rom1 rom2 pcs flows out\n"); return 1; }
+    if (argc < 6) { fprintf(stderr, "usage: h8dasm rom1 rom2 pcs flows out\n"); return 1; }
     FILE *f = fopen(argv[1], "rb"); ROM1 = malloc(ROM1_SIZE); if (fread(ROM1,1,ROM1_SIZE,f) != ROM1_SIZE) return 2; fclose(f);
     f = fopen(argv[2], "rb"); ROM2 = malloc(ROM2_SIZE); if (fread(ROM2,1,ROM2_SIZE,f) != ROM2_SIZE) return 3; fclose(f);
     FILE *out = fopen(argv[5], "w"); if (!out) return 4;

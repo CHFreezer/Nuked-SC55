@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdarg.h>
 #include "h8vm.h"
 #include "h8vm_sm.h"
 #include "h8vm_pcm.h"
@@ -16,10 +17,54 @@ static uint8_t rom1[ROM1_SIZE];
 static uint8_t rom2[ROM2_SIZE];
 static uint8_t sram[SRAM_SIZE];
 static uint8_t dev[0x100];
+static uint8_t ram[0x400]; // nukeykt RAM_SIZE work RAM (page 0 0xfb80-0xfff7 when RAME set)
 
 // UART: shared buffer (defined in h8vm_sm.c). On SC-55 the SM sub-CPU consumes
 // host/MIDI bytes from it; the main MCU's own UART RX is not used.
 static uint8_t uart_rx_byte;
+
+// ---- logging: single file written directly from C (no stdout). The per-instr
+// PC line always goes here; detailed dumps (reads / frt state / sram writes /
+// divergence) are gated by g_verbose (off by default so a long run stays fast).
+// stdout is reserved for the leading '#' status lines only. ----
+static FILE *g_log = NULL;
+static char *g_log_buf = NULL;
+static int g_verbose = 0;
+static void vm_log(const char *fmt, ...)
+{
+    if (!g_log) return;
+    char tbuf[600];
+    va_list ap; va_start(ap, fmt); vsnprintf(tbuf, sizeof tbuf, fmt, ap); va_end(ap);
+    fputs(tbuf, g_log);
+}
+
+// ---- unified PC trace (main + SM in ONE file), owned by the main MCU. ----
+// type 0 (main): "m <mcu_cycles> <cp:pc>"; type 1 (SM): "s <sm_cycles> <pc>".
+// The main loop opens/closes the file on the tracepc window; the SM calls
+// trace_write() for every non-sleep instruction (no-ops when the file is closed).
+static FILE *g_trace_f = NULL;
+static char *g_trace_buf = NULL;
+static int g_trace_closed = 0;
+void trace_write(uint8_t type, uint64_t cycle, uint32_t value)
+{
+    if (!g_trace_f) return;
+    if (type == 0)
+        fprintf(g_trace_f, "m %llu %02x:%04x\n", (unsigned long long)cycle, (unsigned)((value >> 16) & 0xff), (unsigned)(value & 0xffff));
+    else
+        fprintf(g_trace_f, "s %llu %04x\n", (unsigned long long)cycle, (unsigned)(value & 0xffff));
+}
+
+// ---- vm.log SM-instruction log (plain vm.log path, i.e. tracepc off). ----
+// The main loop logs one sampled sm.pc per instruction, which misses the SM
+// instructions that run between samples (SM is 5x async). The SM calls this for
+// every non-sleep instruction, writing the same "s <sm_cycles> <pc>" line as the
+// trace file, so the complete SM PC set is recoverable from vm.log. No-op when
+// g_log is closed (it is NULL while tracepc is on).
+void log_sm_instr(uint64_t cycles, uint32_t pc)
+{
+    if (!g_log) return;
+    fprintf(g_log, "s %llu %04x\n", (unsigned long long)cycles, (unsigned)(pc & 0xffff));
+}
 
 // device register indices (from mcu.h)
 #define DEV_SCR 0x5a
@@ -31,6 +76,7 @@ static uint8_t uart_rx_byte;
 #define DEV_IPRD 0x73
 #define DEV_P9DDR 0x7e
 #define DEV_P9DR 0x7f
+#define DEV_RAME 0x79
 #define DEV_TMR_TCR 0x50
 #define DEV_TMR_TCSR 0x51
 #define DEV_TMR_TCORA 0x52
@@ -191,6 +237,96 @@ static uint64_t analog_end_time = 0;
 static int adf_rd = 0;
 static uint8_t io_sd = 0x00;
 static uint8_t sw_pos = 3;
+static uint16_t ad_val[4]; // snapshot parity (unused by logic; ADC writes dev directly)
+static uint8_t ad_nibble;
+static int ga_lcd_counter = 0; // snapshot parity (decrements only on mk1; idle on mk2)
+
+// LCD display state (ported from nukeykt lcd.cpp) — kept for snapshot parity.
+static uint32_t LCD_DL, LCD_N, LCD_F, LCD_D, LCD_C, LCD_B, LCD_ID, LCD_S;
+static uint32_t LCD_DD_RAM, LCD_AC, LCD_CG_RAM;
+static uint32_t LCD_RAM_MODE = 0;
+static uint8_t LCD_Data[80];
+static uint8_t LCD_CG[64];
+static uint8_t lcd_enable = 1;
+
+static void LCD_Enable(uint32_t enable) { lcd_enable = enable; }
+static void LCD_Write(uint32_t address, uint8_t data)
+{
+    if (address == 0)
+    {
+        if ((data & 0xe0) == 0x20)
+        {
+            LCD_DL = (data & 0x10) != 0;
+            LCD_N = (data & 0x8) != 0;
+            LCD_F = (data & 0x4) != 0;
+        }
+        else if ((data & 0xf8) == 0x8)
+        {
+            LCD_D = (data & 0x4) != 0;
+            LCD_C = (data & 0x2) != 0;
+            LCD_B = (data & 0x1) != 0;
+        }
+        else if ((data & 0xff) == 0x01)
+        {
+            LCD_DD_RAM = 0;
+            LCD_ID = 1;
+            memset(LCD_Data, 0x20, sizeof LCD_Data);
+        }
+        else if ((data & 0xff) == 0x02)
+        {
+            LCD_DD_RAM = 0;
+        }
+        else if ((data & 0xfc) == 0x04)
+        {
+            LCD_ID = (data & 0x2) != 0;
+            LCD_S = (data & 0x1) != 0;
+        }
+        else if ((data & 0xc0) == 0x40)
+        {
+            LCD_CG_RAM = (data & 0x3f);
+            LCD_RAM_MODE = 0;
+        }
+        else if ((data & 0x80) == 0x80)
+        {
+            LCD_DD_RAM = (data & 0x7f);
+            LCD_RAM_MODE = 1;
+        }
+    }
+    else
+    {
+        if (!LCD_RAM_MODE)
+        {
+            LCD_CG[LCD_CG_RAM] = data & 0x1f;
+            if (LCD_ID) LCD_CG_RAM++;
+            else LCD_CG_RAM--;
+            LCD_CG_RAM &= 0x3f;
+        }
+        else
+        {
+            if (LCD_N)
+            {
+                if (LCD_DD_RAM & 0x40)
+                {
+                    if ((LCD_DD_RAM & 0x3f) < 40)
+                        LCD_Data[(LCD_DD_RAM & 0x3f) + 40] = data;
+                }
+                else
+                {
+                    if ((LCD_DD_RAM & 0x3f) < 40)
+                        LCD_Data[LCD_DD_RAM & 0x3f] = data;
+                }
+            }
+            else
+            {
+                if (LCD_DD_RAM < 80)
+                    LCD_Data[LCD_DD_RAM] = data;
+            }
+            if (LCD_ID) LCD_DD_RAM++;
+            else LCD_DD_RAM--;
+            LCD_DD_RAM &= 0x7f;
+        }
+    }
+}
 
 static uint16_t analog_read_pin(uint32_t pin)
 {
@@ -304,6 +440,8 @@ static uint8_t MCU_Read_impl(uint32_t address)
             MCU_Interrupt_SetRequest(INTERRUPT_SOURCE_IRQ1, 0);
             return t;
         }
+        if (off >= 0xfb80 && off < 0xff80 && (dev[DEV_RAME] & 0x80) != 0)
+            return ram[(off - 0xfb80) & 0x3ff];
         if (off >= 0x8000) return sram[off & 0x7fff];
         return 0xff;
     case 1:
@@ -329,17 +467,11 @@ long g_read_count = 0;
 uint8_t MCU_Read(uint32_t address)
 {
     uint8_t v = MCU_Read_impl(address);
+    if (g_verbose && g_read_count < 3000000)
+        vm_log("rc%ld c%llu addr=%08x val=%02x pc=%04x:%04x\n", g_read_count, (unsigned long long)mcu.cycles, (unsigned)address, (int)v, (int)mcu.cp, (int)mcu.pc);
+    g_read_count++;
+    if (g_verbose)
     {
-        static FILE *rf = NULL;
-        if (g_read_count < 3000000)
-        {
-            if (!rf) rf = fopen("read_vm.log", "a");
-            if (rf) fprintf(rf, "rc%ld c%llu addr=%08x val=%02x pc=%04x:%04x\n", g_read_count, (unsigned long long)mcu.cycles, (unsigned)address, (int)v, (int)mcu.cp, (int)mcu.pc);
-        }
-        g_read_count++;
-    }
-    {
-        static FILE *df = NULL;
         static long ddump = 0;
         static uint32_t last_pc[24];
         static int lpi = 0;
@@ -347,21 +479,16 @@ uint8_t MCU_Read(uint32_t address)
         lpi++;
         if (address == 0x0000fd48 && mcu.cp == 0 && mcu.pc == 0x7c3f && ddump < 3)
         {
-            if (!df) df = fopen("divg_vm.log", "w");
-            if (df)
-            {
-                ddump++;
-                fprintf(df, "=== divergence read at 0xfd48 pc=0x7c3f ===\n");
-                for (int i = 0; i < 8; i++) fprintf(df, "r%d=%04x\n", i, (int)mcu.r[i]);
-                fprintf(df, "sr=%04x cp=%02x pc=%04x br=%04x dp=%02x ep=%02x tp=%02x\n",
-                        (int)mcu.sr, (int)mcu.cp, (int)mcu.pc, (int)mcu.br, (int)mcu.dp, (int)mcu.ep, (int)mcu.tp);
-                fprintf(df, "last 24 PCs (oldest first):\n");
-                int start = (lpi - 24) & 23;
-                if (lpi < 24) start = 0;
-                for (int i = 0; i < (lpi < 24 ? lpi : 24); i++)
-                    fprintf(df, "  %08x\n", last_pc[(start + i) & 23]);
-                fflush(df);
-            }
+            ddump++;
+            vm_log("=== divergence read at 0xfd48 pc=0x7c3f ===\n");
+            for (int i = 0; i < 8; i++) vm_log("r%d=%04x\n", i, (int)mcu.r[i]);
+            vm_log("sr=%04x cp=%02x pc=%04x br=%04x dp=%02x ep=%02x tp=%02x\n",
+                    (int)mcu.sr, (int)mcu.cp, (int)mcu.pc, (int)mcu.br, (int)mcu.dp, (int)mcu.ep, (int)mcu.tp);
+            vm_log("last 24 PCs (oldest first):\n");
+            int start = (lpi - 24) & 23;
+            if (lpi < 24) start = 0;
+            for (int i = 0; i < (lpi < 24 ? lpi : 24); i++)
+                vm_log("  %08x\n", last_pc[(start + i) & 23]);
         }
     }
     return v;
@@ -409,21 +536,21 @@ void MCU_Write(uint32_t address, uint8_t value)
         }
         if (off >= 0xe400 && off < 0xe800)
         {
-            if (off == 0xe401) io_sd = value;
+            if (off == 0xe404 || off == 0xe405) LCD_Write(off & 1, value);
+            else if (off == 0xe401) { io_sd = value; LCD_Enable((value & 1) == 0); }
+            else if (off == 0xe402) ga_int_enable = (value << 1);
             return;
         }
-        if (off >= 0xe000 && off < 0xe040) { PCMDev_Write(off & 0x3f, value); return; }
+        if (off >= 0xe000 && off < 0xe400) { PCMDev_Write(off & 0x3f, value); return; }
         if (off >= 0xec00 && off < 0xf000) { SM_SysWrite(off & 0xff, value); return; }
+        if (off >= 0xfb80 && off < 0xff80 && (dev[DEV_RAME] & 0x80) != 0) { ram[(off - 0xfb80) & 0x3ff] = value; return; }
         if (off >= 0x8000) {
             uint32_t sa = off & 0x7fff;
-            if (sa >= 0x5c00 && sa < 0x5d30)
+            if (sa >= 0x5c00 && sa < 0x5d30 && g_verbose)
             {
-                static FILE *wf = NULL;
                 static long wc = 0;
-                if (!wf) wf = fopen("sramw_vm.log", "a");
-                if (wf)
-                    fprintf(wf, "off=%04x val=%02x pc=%04x:%04x step%ld\n",
-                            (int)sa, (int)value, (int)mcu.cp, (int)mcu.pc, wc++);
+                vm_log("sramw off=%04x val=%02x pc=%04x:%04x step%ld\n",
+                        (int)sa, (int)value, (int)mcu.cp, (int)mcu.pc, wc++);
             }
             sram[sa] = value;
             return;
@@ -579,13 +706,7 @@ static void frt_state_log(void)
     if (strcmp(buf, frt_state_prev) != 0)
     {
         strcpy(frt_state_prev, buf);
-        static FILE *f = NULL;
-        if (!f) f = fopen("frtstate_vm.log", "a");
-        if (f)
-        {
-            fwrite(buf, 1, (size_t)n, f);
-            fflush(f);
-        }
+        if (g_verbose) fputs(buf, g_log);
     }
 }
 
@@ -609,24 +730,19 @@ static void trace_line(void)
     if (trace_count >= trace_limit) return;
     trace_count++;
     if (trace_regs)
-        printf("%08ld main pc=%02x:%04x sr=%04x r0=%04x r1=%04x r2=%04x r3=%04x r4=%04x r5=%04x r6=%04x r7=%04x br=%02x dp=%02x ep=%02x tp=%02x | sm pc=%04x sleep=%d sr=%02x intreq=%02x inten=%02x tctrl=%02x sem=%02x\n",
-            trace_count, mcu.cp, mcu.pc, mcu.sr, mcu.r[0], mcu.r[1], mcu.r[2], mcu.r[3],
-            mcu.r[4], mcu.r[5], mcu.r[6], mcu.r[7], mcu.br, mcu.dp, mcu.ep, mcu.tp,
-            sm.pc, sm.sleep, sm.sr, sm_device_mode[0x1c], sm_device_mode[0x1b], sm_device_mode[0x1f], sm_device_mode[0x19]);
+        vm_log("m %llu %02x:%04x sr=%04x r0=%04x r1=%04x r2=%04x r3=%04x r4=%04x r5=%04x r6=%04x r7=%04x br=%02x dp=%02x ep=%02x tp=%02x\n",
+            (unsigned long long)mcu.cycles, mcu.cp, mcu.pc, mcu.sr, mcu.r[0], mcu.r[1], mcu.r[2], mcu.r[3],
+            mcu.r[4], mcu.r[5], mcu.r[6], mcu.r[7], mcu.br, mcu.dp, mcu.ep, mcu.tp);
     else
-        printf("main pc=%02x:%04x | sm pc=%04x\n", mcu.cp, mcu.pc, sm.pc);
+        vm_log("m %llu %02x:%04x\n", (unsigned long long)mcu.cycles, mcu.cp, mcu.pc);
 }
 
 static void MCU_ReadInstruction(void)
 {
     {
-        static FILE *pf = NULL;
         static long pn = 0;
-        if (g_read_count >= 144000 && g_read_count < 145500)
-        {
-            if (!pf) pf = fopen("instr_vm.log", "a");
-            if (pf) fprintf(pf, "step%ld rc%ld pc=%04x:%04x\n", pn, g_read_count, (int)mcu.cp, (int)mcu.pc);
-        }
+        if (g_verbose && g_read_count >= 144000 && g_read_count < 145500)
+            vm_log("instr step%ld rc%ld pc=%04x:%04x\n", pn, g_read_count, (int)mcu.cp, (int)mcu.pc);
         pn++;
     }
     uint8_t operand = MCU_ReadCodeAdvance();
@@ -645,11 +761,131 @@ void MCU_Reset(void)
     mcu.exception_pending = -1;
 }
 
+// ---- Full machine-state snapshot (main MCU + SM sub-CPU + PCM device) ----
+// Byte-for-byte serializable so the VM can resume from a saved point with the
+// same per-cycle behavior as the original emulator.
+// Byte-for-byte compatible with the reference emulator's state_save/state_load
+// (src/mcu.cpp), so the VM can load demo_postW.bin directly with no conversion.
+void VM_SaveState(FILE *f)
+{
+    fwrite(&mcu, sizeof mcu, 1, f);
+    fwrite(ram, sizeof ram, 1, f);
+    fwrite(sram, SRAM_SIZE, 1, f);
+    fwrite(dev, 0x80, 1, f);
+    fwrite(frt, sizeof frt, 1, f);
+    fwrite(&timer, sizeof timer, 1, f);
+    fwrite(&timer_cycles, sizeof timer_cycles, 1, f);
+    fwrite(&timer_tempreg, 1, 1, f);
+    fwrite(&mcu_p0_data, 1, 1, f);
+    fwrite(&mcu_p1_data, 1, 1, f);
+    fwrite(&io_sd, 1, 1, f);
+    fwrite(&sw_pos, 1, 1, f);
+    fwrite(ad_val, sizeof ad_val, 1, f);
+    fwrite(&ad_nibble, 1, 1, f);
+    fwrite(ga_int, sizeof ga_int, 1, f);
+    fwrite(&ga_int_enable, 4, 1, f);
+    fwrite(&ga_int_trigger, 4, 1, f);
+    fwrite(&ga_lcd_counter, 4, 1, f);
+    fwrite(&analog_end_time, sizeof analog_end_time, 1, f);
+    fwrite(sm_uart_buffer, SM_UART_BUFFER_SIZE, 1, f);
+    fwrite(&sm_uart_write_ptr, 4, 1, f);
+    fwrite(&sm_uart_read_ptr, 4, 1, f);
+    fwrite(&uart_rx_byte, 1, 1, f);
+    fwrite(&sm, sizeof sm, 1, f);
+    fwrite(sm_ram, sizeof sm_ram, 1, f);
+    fwrite(sm_shared_ram, sizeof sm_shared_ram, 1, f);
+    fwrite(sm_access, sizeof sm_access, 1, f);
+    fwrite(&sm_p0_dir, 1, 1, f);
+    fwrite(&sm_p1_dir, 1, 1, f);
+    fwrite(sm_device_mode, sizeof sm_device_mode, 1, f);
+    fwrite(&sm_cts, 1, 1, f);
+    fwrite(&sm_timer_cycles, sizeof sm_timer_cycles, 1, f);
+    fwrite(&sm_timer_prescaler, 1, 1, f);
+    fwrite(&sm_timer_counter, 1, 1, f);
+    fwrite(&pcmdev, sizeof pcmdev, 1, f);
+    fwrite(&LCD_DL, 4, 1, f);
+    fwrite(&LCD_N, 4, 1, f);
+    fwrite(&LCD_F, 4, 1, f);
+    fwrite(&LCD_D, 4, 1, f);
+    fwrite(&LCD_C, 4, 1, f);
+    fwrite(&LCD_B, 4, 1, f);
+    fwrite(&LCD_ID, 4, 1, f);
+    fwrite(&LCD_S, 4, 1, f);
+    fwrite(&LCD_DD_RAM, 4, 1, f);
+    fwrite(&LCD_AC, 4, 1, f);
+    fwrite(&LCD_CG_RAM, 4, 1, f);
+    fwrite(&LCD_RAM_MODE, 4, 1, f);
+    fwrite(LCD_Data, sizeof LCD_Data, 1, f);
+    fwrite(LCD_CG, sizeof LCD_CG, 1, f);
+    fwrite(&lcd_enable, 1, 1, f);
+}
+
+void VM_LoadState(FILE *f)
+{
+    fread(&mcu, sizeof mcu, 1, f);
+    fread(ram, sizeof ram, 1, f);
+    fread(sram, SRAM_SIZE, 1, f);
+    fread(dev, 0x80, 1, f);
+    fread(frt, sizeof frt, 1, f);
+    fread(&timer, sizeof timer, 1, f);
+    fread(&timer_cycles, sizeof timer_cycles, 1, f);
+    fread(&timer_tempreg, 1, 1, f);
+    fread(&mcu_p0_data, 1, 1, f);
+    fread(&mcu_p1_data, 1, 1, f);
+    fread(&io_sd, 1, 1, f);
+    fread(&sw_pos, 1, 1, f);
+    fread(ad_val, sizeof ad_val, 1, f);
+    fread(&ad_nibble, 1, 1, f);
+    fread(ga_int, sizeof ga_int, 1, f);
+    fread(&ga_int_enable, 4, 1, f);
+    fread(&ga_int_trigger, 4, 1, f);
+    fread(&ga_lcd_counter, 4, 1, f);
+    fread(&analog_end_time, sizeof analog_end_time, 1, f);
+    fread(sm_uart_buffer, SM_UART_BUFFER_SIZE, 1, f);
+    fread(&sm_uart_write_ptr, 4, 1, f);
+    fread(&sm_uart_read_ptr, 4, 1, f);
+    fread(&uart_rx_byte, 1, 1, f);
+    fread(&sm, sizeof sm, 1, f);
+    fread(sm_ram, sizeof sm_ram, 1, f);
+    fread(sm_shared_ram, sizeof sm_shared_ram, 1, f);
+    fread(sm_access, sizeof sm_access, 1, f);
+    fread(&sm_p0_dir, 1, 1, f);
+    fread(&sm_p1_dir, 1, 1, f);
+    fread(sm_device_mode, sizeof sm_device_mode, 1, f);
+    fread(&sm_cts, 1, 1, f);
+    fread(&sm_timer_cycles, sizeof sm_timer_cycles, 1, f);
+    fread(&sm_timer_prescaler, 1, 1, f);
+    fread(&sm_timer_counter, 1, 1, f);
+    fread(&pcmdev, sizeof pcmdev, 1, f);
+    fread(&LCD_DL, 4, 1, f);
+    fread(&LCD_N, 4, 1, f);
+    fread(&LCD_F, 4, 1, f);
+    fread(&LCD_D, 4, 1, f);
+    fread(&LCD_C, 4, 1, f);
+    fread(&LCD_B, 4, 1, f);
+    fread(&LCD_ID, 4, 1, f);
+    fread(&LCD_S, 4, 1, f);
+    fread(&LCD_DD_RAM, 4, 1, f);
+    fread(&LCD_AC, 4, 1, f);
+    fread(&LCD_CG_RAM, 4, 1, f);
+    fread(&LCD_RAM_MODE, 4, 1, f);
+    fread(LCD_Data, sizeof LCD_Data, 1, f);
+    fread(LCD_CG, sizeof LCD_CG, 1, f);
+    fread(&lcd_enable, 1, 1, f);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3)
     {
-        printf("usage: h8vm.exe rom1.bin rom2.bin romsm.bin [limit] [noregs]\n");
+        printf("usage: h8vm.exe rom1.bin rom2.bin romsm.bin [limit] [noregs] [verbose] [waverom1 waverom2]\n");
+        printf("       [savesnap file cycle] [loadsnap file]  (loadsnap = load full state at start)\n");
+        printf("       [tracepc file [start end]]  (log 'cycles cp:pc' for every instr in [start,end), default 200M..210M)\n");
+        printf("       [demo]  (apply the built-in Q/R/T/W key sequence to start the built-in demo;\n");
+        printf("                off by default so a loadsnap of a demo run starts in the exact saved state)\n");
+        printf("       [mocknote]  (post a MIDI note-on 0x90,60,100 into the shared UART at 144M cycles\n");
+        printf("                (6s), aligned with the [demo] start, to exercise the SM UART RX path;\n");
+        printf("                off by default; only effective in from-reset runs)\n");
         return 1;
     }
     FILE *f = fopen(argv[1], "rb");
@@ -666,10 +902,38 @@ int main(int argc, char **argv)
     trace_limit = 500000;
     trace_regs = 1;
     const char *wav1 = 0, *wav2 = 0;
+    const char *save_file = 0;
+    uint64_t save_at = 0;
+    int save_done = 0;
+    const char *load_file = 0;
+    const char *tracepc_file = 0;
+    int tracepc_enabled = 0;
+    uint64_t tracepc_start = 200000000, tracepc_end = 210000000;
+    int demo_keys_enabled = 0;
+    int mocknote_enabled = 0;
+    int mocknote_done = 0;
     for (int i = 4; i < argc; i++)
     {
         if (strcmp(argv[i], "noregs") == 0)
             trace_regs = 0;
+        else if (strcmp(argv[i], "savesnap") == 0 && i + 2 < argc)
+            { save_file = argv[++i]; save_at = strtoull(argv[++i], 0, 10); }
+        else if (strcmp(argv[i], "loadsnap") == 0 && i + 1 < argc)
+            { load_file = argv[++i]; }
+        else if (strcmp(argv[i], "tracepc") == 0 && i + 1 < argc)
+        {
+            tracepc_file = argv[++i]; tracepc_enabled = 1;
+            if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9')
+                tracepc_start = strtoull(argv[++i], 0, 10);
+            if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9')
+                tracepc_end = strtoull(argv[++i], 0, 10);
+        }
+        else if (strcmp(argv[i], "demo") == 0)
+            demo_keys_enabled = 1;
+        else if (strcmp(argv[i], "mocknote") == 0)
+            mocknote_enabled = 1;
+        else if (strcmp(argv[i], "verbose") == 0)
+            g_verbose = 1;
         else if (argv[i][0] >= '0' && argv[i][0] <= '9')
             trace_limit = strtol(argv[i], 0, 10);
         else if (!wav1)
@@ -684,43 +948,71 @@ int main(int argc, char **argv)
     MCU_Reset();
     SM_Reset();
 
-    // Pre-load a note-on (MIDI: 0x90, note 60, vel 100) into the shared UART.
-    uart_post(0x90);
-    uart_post(60);
-    uart_post(100);
+    // note-on is posted at 144M cycles (6s) in the run loop below (aligned with
+    // the demo start; the LCD splash animation takes ~5s and no sound is output
+    // until it finishes, so a reset-time note would be lost).
+
+    // SC-55mk2 built-in demo, no external MIDI. Applied only when the [demo]
+    // flag is given (off by default: a `loadsnap` of a mid-demo snapshot should
+    // start in the exact saved state, key latches included, without re-driving
+    // the boot key sequence). Key sequence (verified in the original emulator,
+    // mirrored in machine time; 1 instruction = 12 cycles):
+    //   machine auto-powers-on at boot -> Q (power off) -> hold R+T (Part< +
+    //   Part>) -> Q again (power on with RT held = demo-mode standby) -> release
+    //   all -> W (INST ALL) starts the demo. Each state is held 250ms.
+    extern void VM_SetButtons(uint32_t mask);
+    enum { VM_BTN_POWER = 1u << 0, VM_BTN_INST_ALL = 1u << 6,
+           VM_BTN_PART_R = 1u << 14, VM_BTN_PART_L = 1u << 22 };
+    typedef struct { long inst; uint32_t mask; } demo_step_t;
+    static const demo_step_t demo_seq[] = {
+        { 12000000, VM_BTN_POWER },
+        { 12500000, VM_BTN_PART_L | VM_BTN_PART_R },
+        { 13000000, VM_BTN_PART_L | VM_BTN_PART_R },
+        { 13500000, VM_BTN_POWER | VM_BTN_PART_L | VM_BTN_PART_R },
+        { 14000000, 0 },
+        { 16000000, VM_BTN_INST_ALL },
+        { 16500000, 0 },
+    };
+    int demo_step = 0;
 
     printf("# H8/532 VM trace, limit=%ld\n", trace_limit);
     printf("# reset -> cp=%02x pc=%04x\n", mcu.cp, mcu.pc);
 
-    FILE *st_f = NULL;
+    // loadsnap <file> = load the full saved state at the very start (before any
+    // instruction), matching the ground truth's -loadsnap (ex- -demo2).
+    if (load_file)
+    {
+        FILE *lf = fopen(load_file, "rb");
+        if (lf) { VM_LoadState(lf); fclose(lf); printf("# loaded %s at start\n", load_file); }
+        else printf("# load: cannot open %s\n", load_file);
+    }
+
+    // Per-instruction log written directly from C (buffered, no stdout). Skipped
+    // when tracepc is on (that writes the unified main+SM trace instead).
+    g_log = tracepc_enabled ? NULL : fopen("vm.log", "w");
+    g_log_buf = malloc(1 << 20);
+    if (g_log && g_log_buf) setvbuf(g_log, g_log_buf, _IOFBF, 1 << 20);
+
     long st_n = 0;
     for (long i = 0; i < trace_limit; i++)
     {
-        trace_line();
-        if (mcu.cp == 0 && mcu.pc == 0x7c3f)
+        if (demo_keys_enabled)
+            while (demo_step < 7 && i >= demo_seq[demo_step].inst)
+                VM_SetButtons(demo_seq[demo_step++].mask);
+        if (g_verbose && mcu.cp == 0 && mcu.pc == 0x7c3f)
         {
-            if (!st_f) st_f = fopen("stack_vm.log", "w");
-            if (st_f)
-            {
-                fprintf(st_f, "burst%ld r7=%04x prepop: ", st_n++, mcu.r[7]);
-                for (int s = 0; s < 16; s++)
-                    fprintf(st_f, "%02x%02x ", sram[(mcu.r[7] + s * 2) & 0x7fff], sram[(mcu.r[7] + s * 2 + 1) & 0x7fff]);
-                fprintf(st_f, "\n");
-                fflush(st_f);
-            }
+            vm_log("burst%ld r7=%04x prepop: ", st_n++, mcu.r[7]);
+            for (int s = 0; s < 16; s++)
+                vm_log("%02x%02x ", sram[(mcu.r[7] + s * 2) & 0x7fff], sram[(mcu.r[7] + s * 2 + 1) & 0x7fff]);
+            vm_log("\n");
             if (st_n <= 32)
             {
-                FILE *rm = fopen("ram_vm.log", "a");
-                if (rm)
+                vm_log("=== burst%ld sram ===\n", st_n - 1);
+                for (int b = 0; b < 0x8000; b += 16)
                 {
-                    fprintf(rm, "=== burst%ld ===\n", st_n - 1);
-                    for (int b = 0; b < 0x8000; b += 16)
-                    {
-                        for (int k = 0; k < 16; k++)
-                            fprintf(rm, "%02x", sram[b + k]);
-                        fprintf(rm, "\n");
-                    }
-                    fclose(rm);
+                    for (int k = 0; k < 16; k++)
+                        vm_log("%02x", sram[b + k]);
+                    vm_log("\n");
                 }
             }
         }
@@ -731,12 +1023,56 @@ int main(int argc, char **argv)
         if (!mcu.sleep)
             MCU_ReadInstruction();
         mcu.cycles += 12;
+        // log after the increment so the m-line cycle matches the tracepc
+        // m-line (both report the instruction's completion cycle, post-fetch pc).
+        trace_line();
+        if (tracepc_enabled)
+        {
+            if (mcu.cycles >= tracepc_start && mcu.cycles < tracepc_end)
+            {
+                if (!g_trace_f && !g_trace_closed)
+                {
+                    g_trace_f = fopen(tracepc_file, "w");
+                    if (g_trace_f) { g_trace_buf = (char *)malloc(1 << 20); setvbuf(g_trace_f, g_trace_buf, _IOFBF, 1 << 20); }
+                }
+                trace_write(0, mcu.cycles, ((uint32_t)mcu.cp << 16) | mcu.pc);
+            }
+            else if (mcu.cycles >= tracepc_end && g_trace_f && !g_trace_closed)
+            {
+                fflush(g_trace_f);
+                fclose(g_trace_f);
+                g_trace_f = NULL;
+                g_trace_closed = 1;
+            }
+        }
+        if (save_file && !save_done && mcu.cycles >= save_at)
+        {
+            FILE *sf = fopen(save_file, "wb");
+            if (sf) { VM_SaveState(sf); fclose(sf); printf("# saved %s at c%llu\n", save_file, (unsigned long long)mcu.cycles); }
+            else printf("# save: cannot open %s\n", save_file);
+            save_done = 1;
+        }
+        // mock note-on ([mocknote]): fire at 144M cycles (6s), aligned with the
+        // demo start (the LCD splash animation takes ~5s and no sound is output
+        // until it finishes, so a reset-time note would be lost).
+        if (mocknote_enabled && !mocknote_done && mcu.cycles >= 144000000ull)
+        {
+            uart_post(0x90);
+            uart_post(60);
+            uart_post(100);
+            mocknote_done = 1;
+            printf("# mocknote: posted note-on at c%llu\n", (unsigned long long)mcu.cycles);
+        }
         PCMDev_Update(mcu.cycles);
         TIMER_Clock(mcu.cycles);
         SM_Update(mcu.cycles);
         MCU_UpdateAnalog(mcu.cycles);
-        frt_state_log();
+        if (g_verbose) frt_state_log();
     }
+    if (g_log) { fflush(g_log); fclose(g_log); }
+    free(g_log_buf);
+    if (g_trace_f) { fflush(g_trace_f); fclose(g_trace_f); }
+    free(g_trace_buf);
     printf("# done, %ld instructions\n", trace_count);
     printf("# SM: read_ptr=%u write_ptr=%u sem=%02x intreq=%02x uart1_ctrl=%02x sm_pc=%.4x sm_sleep=%d sm_sr=%02x\n",
         sm_uart_read_ptr, sm_uart_write_ptr,
