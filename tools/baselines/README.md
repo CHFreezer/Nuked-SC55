@@ -38,8 +38,12 @@ section below; the SM set is the 251-PC from-reset demo+mocknote run, see
   demo mocknote`, no `loadsnap`) → `logproc` → pass its `pc_sm.txt` to `smdasm …
   linear`. Both `demo` and `mocknote` are required: `mocknote` alone reaches only
   244 SM PCs; the demo key sequence adds the remaining 7.
-- `dasm_full.txt`      — `h8dasm.exe` output over the 9217-PC set (18647 lines;
-  0 undecoded operands after the h8dasm addressing-mode fix, see dasm_annotated §5)
+- `dasm_full.txt`      — `h8dasm.exe` output over the 9217-PC set (9217 instr
+   lines; 0 undecoded operands; cross-validated by `tools/verify/verify_dasm.py`
+   — Phase A length/target 0-fail on 833332 instr, Phase B register/SP/sr
+   0-fail on 44213 instr). Decodes the counter-branch opcodes (`01`/`06`/`07`,
+   3-byte `cntjmp rN <disp> [Z|!Z]`) and the `11` register-indirect family
+   (`ret`/`ret via rN:rN+1`/`jmp rN`/`jsr rN`) per GT `MCU_Jump_JMP`.
 - `dasm_annotated.txt` — hand-annotated analysis of the hot functions (main
   sleep loop, rom2 per-frame loop, SM 6502 DSP loop, vector tables)
 

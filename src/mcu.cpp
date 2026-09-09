@@ -202,19 +202,22 @@ static uint8_t io_sd = 0x00;
 
 SDL_atomic_t mcu_button_pressed = { 0 };
 
-// SC-55mk2 built-in demo key sequence (-demo):
+// SC-55mk2 built-in demo key sequence (-demo [cycles]):
 // Q (power on) -> hold RT (Part< + Part>) -> Q again (power cycle with RT held)
 // -> release all -> W (INST_ALL) starts the demo song.
 static bool demo_seq_enabled = false;
+static uint64_t demo_start = 144000000;  // first-event cycle (default 144M, min 144M)
 
-// (-mocknote): post a MIDI note-on (0x90, note 60, vel 100) into the shared UART
-// so the SM's UART RX path runs without a MIDI device. Off by default. Fired at
-// 144M cycles (6s) to align with the -demo key sequence start: the LCD splash
-// animation takes ~5s and no sound is output until it finishes, so a reset-time
-// note would be lost. Only effective in from-reset runs (a -loadsnap overwrites
-// the buffer; the timer restarts from the loaded cycles).
+// (-mocknote [cycles]): post a MIDI note-on (0x90, note 60, vel 100) into the
+// shared UART so the SM's UART RX path runs without a MIDI device. Off by
+// default. Default cycle 144M (6s) — after the ~5s LCD splash, so a reset-time
+// note is not lost. The SC-55mk2 rejects MIDI while in the demo phase, so to
+// take effect the note must fire BEFORE the -demo start. Only effective in
+// from-reset runs (a -loadsnap overwrites the buffer; the timer restarts from
+// the loaded cycles).
 static bool mocknote_enabled = false;
 static bool mocknote_done = false;
+static uint64_t mocknote_at = 144000000;  // note cycle (default 144M, min 144M)
 
 // (-tracepc <file> [start end]): log a unified main+SM PC trace for every
 // instruction in the [start,end) window (default 200M..210M), to verify
@@ -223,6 +226,10 @@ static bool mocknote_done = false;
 static bool tracepc_enabled = false;
 static const char *tracepc_file = nullptr;
 static uint64_t tracepc_start = 200000000, tracepc_end = 210000000;
+
+// (-pcmtrace): log PCM control-register writes (voice_enable 0x00-03, config
+// 0x3c/3d, select_channel 0x3e) with the H8 PC, to pcm_trace.log.
+static bool g_pcm_trace = false;
 
 // ---- unified PC trace (main + SM in ONE file), owned by the main MCU. ----
 // type 0 (main): "m <mcu_cycles> <cp:pc>"; type 1 (SM): "s <sm_cycles> <pc>".
@@ -238,6 +245,20 @@ void trace_write(uint8_t type, uint64_t cycle, uint32_t value)
         fprintf(g_trace_f, "m %llu %02x:%04x\n", (unsigned long long)cycle, (unsigned)((value >> 16) & 0xff), (unsigned)(value & 0xffff));
     else
         fprintf(g_trace_f, "s %llu %04x\n", (unsigned long long)cycle, (unsigned)(value & 0xffff));
+}
+
+// (-demo [cycles]) / (-mocknote [cycles]): parse a cycle count from an argument.
+// Accepts a full decimal ("144000000") or hex ("0x8a12c00") cycle count.
+static uint64_t parse_cycles(const char *s)
+{
+    return strtoull(s, nullptr, 0);
+}
+
+// True if an argument looks like a cycle count (starts with a digit) rather than
+// a flag (starts with '-').
+static bool is_cycle_arg(const char *s)
+{
+    return s && s[0] >= '0' && s[0] <= '9';
 }
 
 uint8_t RCU_Read(void)
@@ -890,6 +911,19 @@ void MCU_Write(uint32_t address, uint8_t value)
                 }
                 else if (address >= (base | 0x000) && address < (base | 0x400))
                 {
+                    if (g_pcm_trace)
+                    {
+                        uint32_t reg = address & 0x3f;
+                        if ((reg <= 3) || reg == 0x3c || reg == 0x3d || reg == 0x3e)
+                        {
+                            static FILE *tf = nullptr;
+                            if (!tf) tf = fopen("pcm_trace.log", "w");
+                            if (tf)
+                                fprintf(tf, "pcm reg=%02x val=%02x pc=%02x:%04x cyc=%llu\n",
+                                        (int)reg, (int)value, (int)mcu.cp, (int)mcu.pc,
+                                        (unsigned long long)mcu.cycles);
+                        }
+                    }
                     PCM_Write(address & 0x3f, value);
                 }
                 else if (!mcu_scb55 && address >= 0xec00 && address < 0xf000)
@@ -1306,14 +1340,15 @@ int SDLCALL work_thread(void* data)
             }
         }
 
-        // ---- demo key sequence (SC-55mk2 built-in demo, -demo) ----
+        // ---- demo key sequence (SC-55mk2 built-in demo, -demo [cycles]) ----
         if (demo_seq_enabled)
         {
-            // Start 6s after boot: the LCD splash animation must finish first.
-            // Each key state is held 250ms (6M cycles @ 24MHz) so the firmware's
-            // debounce logic sees real key presses. The second power-on has no
-            // boot animation, so W can be pressed at 8s.
-            static const uint64_t demo_dt[7] = { 144000000, 150000000, 156000000, 162000000, 168000000, 192000000, 198000000 };
+            // Key states fire at demo_start + relative offsets. The LCD splash
+            // takes ~5s, so the default start is 144M cycles (6s). Each key state
+            // is held 250ms (6M cycles @ 24MHz) so the firmware's debounce logic
+            // sees real key presses; the second power-on has no boot animation,
+            // so W (INST_ALL) can start the demo song at +48M.
+            static const uint64_t demo_off[7] = { 0, 6000000, 12000000, 18000000, 24000000, 48000000, 54000000 };
             static const uint32_t demo_mask[7] = {
                 1u << MCU_BUTTON_POWER,
                 (1u << MCU_BUTTON_PART_L) | (1u << MCU_BUTTON_PART_R),
@@ -1324,21 +1359,21 @@ int SDLCALL work_thread(void* data)
                 0,
             };
             static int demo_step = 0;
-            static uint64_t demo_elapsed = 0;
-            demo_elapsed += 12;
-            while (demo_step < 7 && demo_elapsed >= demo_dt[demo_step])
+            while (demo_step < 7 && mcu.cycles >= demo_start + demo_off[demo_step])
             {
                 SDL_AtomicSet(&mcu_button_pressed, (int)demo_mask[demo_step]);
-                printf("demo: step%d mask=%08x\n", demo_step, demo_mask[demo_step]);
+                printf("demo: step%d mask=%08x at c%llu\n", demo_step, demo_mask[demo_step],
+                       (unsigned long long)(demo_start + demo_off[demo_step]));
                 demo_step++;
             }
         }
 
-        // ---- mock note-on (-mocknote): fire at 6s, aligned with the demo start ----
+        // ---- mock note-on (-mocknote [cycles]) ----
         // The LCD splash animation takes ~5s and no sound is output until it
-        // finishes, so the note is posted after it (144M cycles = 6s), matching
-        // the demo's first key event.
-        if (mocknote_enabled && !mocknote_done && mcu.cycles >= 144000000ull)
+        // finishes, so the default fire cycle is 144M (6s). The SC-55mk2 rejects
+        // MIDI during the demo phase, so to take effect the note must fire
+        // BEFORE the -demo start (see the startup warning when both are enabled).
+        if (mocknote_enabled && !mocknote_done && mcu.cycles >= mocknote_at)
         {
             SM_PostUART(0x90);
             SM_PostUART(60);
@@ -1800,10 +1835,14 @@ int main(int argc, char *argv[])
             else if (!strcmp(argv[i], "-demo"))
             {
                 demo_seq_enabled = true;
+                if (i + 1 < argc && is_cycle_arg(argv[i + 1]))
+                    demo_start = parse_cycles(argv[++i]);
             }
             else if (!strcmp(argv[i], "-mocknote"))
             {
                 mocknote_enabled = true;
+                if (i + 1 < argc && is_cycle_arg(argv[i + 1]))
+                    mocknote_at = parse_cycles(argv[++i]);
             }
             else if (!strcmp(argv[i], "-tracepc") && i + 1 < argc)
             {
@@ -1813,6 +1852,10 @@ int main(int argc, char *argv[])
                     tracepc_start = strtoull(argv[++i], 0, 10);
                 if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9')
                     tracepc_end = strtoull(argv[++i], 0, 10);
+            }
+            else if (!strcmp(argv[i], "-pcmtrace"))
+            {
+                g_pcm_trace = true;
             }
             else if (!strcmp(argv[i], "-savesnap") && i + 1 < argc)
             {
@@ -1915,12 +1958,14 @@ int main(int argc, char *argv[])
                 printf("  -gm                            Reset system in GM mode.\n");
                 printf("\n");
                 printf("Test / verification (for VM cross-checks):\n");
-                printf("  -demo                          Apply the built-in demo key sequence (starts\n"
-                       "                                 ~6s after boot, after the LCD splash animation).\n");
-                printf("  -mocknote                      Post a MIDI note-on (0x90, note 60, vel 100)\n"
-                       "                                 at 144M cycles (6s), aligned with the -demo\n"
-                       "                                 start, to exercise the SM UART RX path without a\n"
-                       "                                 MIDI device.\n");
+                printf("  -demo [cycles]                 Apply the built-in demo key sequence starting at\n"
+                        "                                 <cycles> (default 144000000 = 6s, min 144000000,\n"
+                        "                                 after the LCD splash animation).\n");
+                printf("  -mocknote [cycles]             Post a MIDI note-on (0x90, note 60, vel 100) at\n"
+                        "                                 <cycles> (default 144000000, min 144000000) to\n"
+                        "                                 exercise the SM UART RX path without a MIDI device.\n"
+                        "                                 The mk2 rejects MIDI during the demo phase, so it\n"
+                        "                                 takes effect only if it fires before -demo.\n");
                 printf("  -tracepc <file> [start end]    Log a unified main+SM PC trace to <file> for the\n"
                        "                                 [start, end) cycle window (default 200M..210M).\n");
                 printf("  -savesnap <cycles>             Dump the full machine state to demo_snap.bin at\n"
@@ -1940,6 +1985,33 @@ int main(int argc, char *argv[])
                 autodetect = false;
             }
         }
+    }
+
+    // ---- validate -demo / -mocknote start cycles (both must be >= 144M) ----
+    if (demo_seq_enabled && demo_start < 144000000)
+    {
+        printf("warning: -demo start c%llu < 144M, clamped to 144M\n", (unsigned long long)demo_start);
+        demo_start = 144000000;
+    }
+    if (mocknote_enabled && mocknote_at < 144000000)
+    {
+        printf("warning: -mocknote c%llu < 144M, clamped to 144M\n", (unsigned long long)mocknote_at);
+        mocknote_at = 144000000;
+    }
+
+    // ---- warn when both -demo and -mocknote are enabled ----
+    // The SC-55mk2 rejects MIDI while in the demo phase, so the note only takes
+    // effect if it fires BEFORE the demo starts.
+    if (demo_seq_enabled && mocknote_enabled)
+    {
+        printf("warning: -demo (start c%llu) and -mocknote (c%llu) both enabled.\n",
+               (unsigned long long)demo_start, (unsigned long long)mocknote_at);
+        printf("         The SC-55mk2 rejects MIDI during the demo phase, so the note\n"
+               "         takes effect only if it fires before the demo (mocknote < demo start).\n");
+        if (mocknote_at >= demo_start)
+            printf("         NOTE: mocknote c%llu >= demo start c%llu -> the note will likely be rejected.\n",
+                   (unsigned long long)mocknote_at, (unsigned long long)demo_start);
+        fflush(stdout);
     }
 
 #if __linux__

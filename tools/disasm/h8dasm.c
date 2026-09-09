@@ -34,6 +34,8 @@ typedef struct {
     int len;
     int has_target, tpage, toff;
     int is_call, is_ret, is_uncond;
+    int kind;        // 0 none, 1 call, 2 uncond, 3 cond, 4 ret, 5 reg-indirect
+    int top, reg, siz, ocode, ore, ext; // general-family fields
     char text[120];
 } dec_t;
 
@@ -50,6 +52,8 @@ static void fmt(dec_t *d, const char *fmt, ...) {
 static void decode(int page, int off, dec_t *d) {
     int o = off;
     d->len = 1; d->has_target = 0; d->is_call = 0; d->is_ret = 0; d->is_uncond = 0;
+    d->tpage = 0; d->toff = 0;
+    d->top = 0; d->reg = 0; d->siz = 0; d->ocode = 0; d->ore = 0; d->ext = 0;
     #define FINISH do { d->len = o - off; return; } while(0)
     int op = rbyte(page, off); o++;
     #define ADV(n) do { o += (n); } while(0)
@@ -57,27 +61,51 @@ static void decode(int page, int off, dec_t *d) {
     #define W2 (rword(page, o-2))
     #define S1 (rbyte_s(page, o-1))
     #define SW2 (rword_s(page, o-2))
+    d->kind = 0;
 
     if (op == 0x00) { fmt(d, "nop"); FINISH; }
-    if (op == 0x01 || op == 0x06 || op == 0x07 || op == 0x11) { ADV(1); int b=B1;
-        fmt(d, (b & 0xf0)==0x17 && (b&7) ? "jmp-reg r%d" : "jmp r%d", b & 7); FINISH; }
-    if (op == 0x10) { ADV(2); fmt(d,"jmp #0x%04x",W2); d->has_target=1;d->tpage=page;d->toff=W2;d->is_uncond=1; FINISH; }
+    // GT MCU_Jump_JMP (src/mcu_opcodes.cpp:338): 0x01/06/07 = 3字节 (opcode2 + int8 disp),
+    // opcode2>>3==0x17 时合法: r[reg]--, 若未下溢则 pc+=disp (06 需 Z, 07 需 !Z); 否则 trap。
+    if (op == 0x01 || op == 0x06 || op == 0x07) {
+        int b = rbyte(page, off+1);
+        if ((b >> 3) == 0x17) {
+            ADV(2); int reg = b & 7, disp = rbyte_s(page, off+2); int t = (off+3) + disp;
+            d->has_target = 1; d->tpage = page; d->toff = t & 0xffff; d->kind = 3;
+            fmt(d, (op==0x01) ? "cntjmp r%d %d -> 0x%04x"
+                  : (op==0x06) ? "cntjmp r%d %d (Z) -> 0x%04x"
+                  : "cntjmp r%d %d (!Z) -> 0x%04x", reg, disp, t & 0xffff);
+            FINISH;
+        }
+        ADV(1); d->kind = 5; fmt(d, "??0x%02x (trap)", b); FINISH;
+    }
+    // 0x11 = 2字节寄存器间接: 0x19 ret(pop cp,pc); 0x18/9 系列 ret via r对;
+    // 0x1a jmp r; 0x1b jsr r; 其余 trap。
+    if (op == 0x11) {
+        ADV(1); int b = B1, op_h = b >> 3, reg = b & 7;
+        if (b == 0x19) { d->kind = 4; fmt(d, "ret (pop cp,pc)"); }
+        else if (op_h == 0x19) { d->kind = 4; fmt(d, "ret via r%d:r%d", reg & ~1, reg+1); }
+        else if (op_h == 0x1a) { d->kind = 5; fmt(d, "jmp r%d", reg); }
+        else if (op_h == 0x1b) { d->kind = 5; d->is_call = 1; fmt(d, "jsr r%d", reg); }
+        else { d->kind = 5; fmt(d, "??0x%02x (trap)", b); }
+        FINISH;
+    }
+    if (op == 0x10) { ADV(2); fmt(d,"jmp #0x%04x",W2); d->has_target=1;d->tpage=page;d->toff=W2;d->is_uncond=1; d->kind=2; FINISH; }
     if (op == 0x02) { ADV(1); fmt(d,"ldm #0x%02x",B1); FINISH; }
     if (op == 0x12) { ADV(1); fmt(d,"stm #0x%02x",B1); FINISH; }
-    if (op == 0x03) { ADV(3); int pg=rbyte(page,o-3),ad=rword(page,o-2); fmt(d,"pjsr #0x%02x:%04x",pg,ad); d->has_target=1;d->tpage=pg;d->toff=ad;d->is_call=1; FINISH; }
-    if (op == 0x13) { ADV(3); int pg=rbyte(page,o-3),ad=rword(page,o-2); fmt(d,"pjmp #0x%02x:%04x",pg,ad); d->has_target=1;d->tpage=pg;d->toff=ad;d->is_uncond=1; FINISH; }
+    if (op == 0x03) { ADV(3); int pg=rbyte(page,o-3),ad=rword(page,o-2); fmt(d,"pjsr #0x%02x:%04x",pg,ad); d->has_target=1;d->tpage=pg;d->toff=ad;d->is_call=1; d->kind=1; FINISH; }
+    if (op == 0x13) { ADV(3); int pg=rbyte(page,o-3),ad=rword(page,o-2); fmt(d,"pjmp #0x%02x:%04x",pg,ad); d->has_target=1;d->tpage=pg;d->toff=ad;d->is_uncond=1; d->kind=2; FINISH; }
     if (op == 0x08) { ADV(1); fmt(d,"trapa #0x%02x",B1); FINISH; }
-    if (op == 0x18) { ADV(2); fmt(d,"jsr #0x%04x",W2); d->has_target=1;d->tpage=page;d->toff=W2;d->is_call=1; FINISH; }
-    if (op == 0x0a) { fmt(d,"rte"); d->is_ret=1; FINISH; }
-    if (op == 0x19) { fmt(d,"rts"); d->is_ret=1; FINISH; }
+    if (op == 0x18) { ADV(2); fmt(d,"jsr #0x%04x",W2); d->has_target=1;d->tpage=page;d->toff=W2;d->is_call=1; d->kind=1; FINISH; }
+    if (op == 0x0a) { fmt(d,"rte"); d->is_ret=1; d->kind=4; FINISH; }
+    if (op == 0x19) { fmt(d,"rts"); d->is_ret=1; d->kind=4; FINISH; }
     if (op == 0x1a) { fmt(d,"sleep"); FINISH; }
-    if (op == 0x0e) { ADV(1); int t=(off+2)+S1; fmt(d,"bsr %d -> 0x%04x",S1,t&0xffff); d->has_target=1;d->tpage=page;d->toff=t&0xffff; FINISH; }
-    if (op == 0x1e) { ADV(2); int t=(off+3)+SW2; fmt(d,"bsr16 -> 0x%04x",t&0xffff); d->has_target=1;d->tpage=page;d->toff=t&0xffff; FINISH; }
-    if (op == 0x14 || op == 0x1c) { ADV(1); fmt(d,"rtd %d",S1); FINISH; }
+    if (op == 0x0e) { ADV(1); int t=(off+2)+S1; fmt(d,"bsr %d -> 0x%04x",S1,t&0xffff); d->has_target=1;d->tpage=page;d->toff=t&0xffff; d->kind=1; FINISH; }
+    if (op == 0x1e) { ADV(2); int t=(off+3)+SW2; fmt(d,"bsr16 -> 0x%04x",t&0xffff); d->has_target=1;d->tpage=page;d->toff=t&0xffff; d->kind=1; FINISH; }
+    if (op == 0x14 || op == 0x1c) { ADV(1); fmt(d,"rtd %d",S1); d->kind=4; FINISH; }
     if (op >= 0x20 && op <= 0x3f) { int c=op&0xf;
         if (op & 0x10) { ADV(2); int t=(off+3)+SW2; fmt(d,"%s 0x%04x -> 0x%04x",BCC_NAME[c],(unsigned)SW2,t&0xffff); d->has_target=1;d->tpage=page;d->toff=t&0xffff; }
         else { ADV(1); int t=(off+2)+S1; fmt(d,"%s %d -> 0x%04x",BCC_NAME[c],S1,t&0xffff); d->has_target=1;d->tpage=page;d->toff=t&0xffff; }
-        FINISH; }
+        d->kind=3; FINISH; }
     if (op >= 0x40 && op <= 0x4f) { int reg=op&7,siz=op&8; if(siz){ADV(2);fmt(d,"cmp r%d,w #0x%04x",reg,W2);}else{ADV(1);fmt(d,"cmp r%d,b #0x%02x",reg,B1);} FINISH; }
     if (op >= 0x50 && op <= 0x57) { ADV(1); fmt(d,"move r%d #0x%02x",op&7,B1); FINISH; }
     if (op >= 0x58 && op <= 0x5f) { ADV(2); fmt(d,"movi r%d #0x%04x",op&7,W2); FINISH; }
@@ -87,6 +115,7 @@ static void decode(int page, int off, dec_t *d) {
 
     if ((op==0x04||op==0x05||op==0x0c||op==0x0d||op==0x15||op==0x1d) || op >= 0xa0) {
         int top=op&0xf0, reg=op&7, siz=op&8;
+        d->top=top; d->reg=reg; d->siz=siz;
         int disp=0;
         if (top==0xe0){ disp=rbyte_s(page,o); ADV(1); }
         else if (top==0xf0){ disp=rword_s(page,o); ADV(2); }
@@ -97,6 +126,7 @@ static void decode(int page, int off, dec_t *d) {
         int ocode,ore,ext=0;
         if (opcode==0x00){ int e=rbyte(page,o); ADV(1); ore=e&7; ocode=e>>3; ext=1; }
         else { ocode=opcode>>3; ore=opcode&7; }
+        d->ocode=ocode&31; d->ore=ore; d->ext=ext;
         // 源操作数格式，逐模式对齐 VM 的 MCU_Operand_General（h8vm_body.c:541）
         char srcs[32];
         if (top==0xa0) sprintf(srcs,"r%d",reg);                          // 直接 r[reg]
@@ -109,7 +139,54 @@ static void decode(int page, int off, dec_t *d) {
         else if (top==0x00 && reg==4) sprintf(srcs,(siz)?"#0x%04x":"#0x%02x",disp); // 立即数
         else if (top==0x10 && reg==5) sprintf(srcs,"(dp,0x%04x)",disp&0xffff);     // 绝对 (DP 页)
         else sprintf(srcs,"?");
-        fmt(d,"%s %s r%d%s",OPC_NAME[ocode&31],srcs,ore,ext?" x":"");
+        // GT MCU_Opcode_MOVG_Immediate (src/mcu_opcodes.cpp:825): 源操作数为
+        // indirect/absolute 时，码流尾部还跟一个立即数 (ore 4/6: 1字节; ore 5/7: 2字节);
+        // ore 0-3 时 GT 直接 trap，无额外字节。
+        char imms[16] = "";
+        {
+            int is_ind = (top==0xb0||top==0xc0||top==0xd0||top==0xe0||top==0xf0);
+            int is_abs = ((top==0x00&&reg==5)||(top==0x10&&reg==5));
+            if (ocode==0 && (is_ind||is_abs)) {
+                if (ore==4 || ore==6)      { int v=rbyte_s(page,o); ADV(1); snprintf(imms,sizeof imms," #0x%02x",v&0xff); }
+                else if (ore==5 || ore==7) { int v=rword_s(page,o); ADV(2); snprintf(imms,sizeof imms," #0x%04x",v&0xffff); }
+            }
+        }
+        // ore 语义依 ocode 而定（GT MCU_Opcode_Table, src/mcu_opcodes.cpp:1727）。
+        // 下列 ocode 的 ore 并非寄存器，按 GT 实际语义打印，避免 `r<ore>` 误导：
+        if (ocode == 0) {  // MOVG_Immediate (mcu_opcodes.cpp:825): ore 选择操作
+            if (ore==6 || ore==7)      fmt(d,"MOVG%s%s -> %s", ext?" x":"", imms, srcs); // 写 imm 到操作数
+            else if (ore==4 || ore==5) fmt(d,"SUB%s %s%s", ext?" x":"", srcs, imms);     // 操作数 -= imm
+            else                       fmt(d,"MOVG ??%d (trap)", ore);
+            FINISH;
+        }
+        if (ocode == 1) {  // ADDQ (mcu_opcodes.cpp:1141): ore = 立即数编码
+            if (ore==0)      fmt(d,"ADDQ #1 %s%s", srcs, ext?" x":"");
+            else if (ore==1) fmt(d,"ADDQ #2 %s%s", srcs, ext?" x":"");
+            else if (ore==4) fmt(d,"ADDQ #-1 %s%s", srcs, ext?" x":"");
+            else if (ore==5) fmt(d,"ADDQ #-2 %s%s", srcs, ext?" x":"");
+            else             fmt(d,"ADDQ ??%d (trap)", ore);
+            FINISH;
+        }
+        if (ocode == 2) {  // CLR 族 (mcu_opcodes.cpp:937): ore = 子操作码
+            static const char *cn[] = {"SWAP","EXTS","EXTU","CLR","NEG","NOT","TST","?"};
+            if (ore<=6) fmt(d,"%s %s%s", cn[ore], srcs, ext?" x":"");
+            else        fmt(d,"CLR ??%d (trap)", ore);
+            FINISH;
+        }
+        if (ocode == 3) {  // SHLR 族 (mcu_opcodes.cpp:1219): ore = 移位选择码
+            static const char *sn[] = {"SHAL","SHAR","SHLL","SHLR","ROTL","ROTR","ROTXL","?"};
+            if (ore<=6) fmt(d,"%s %s%s", sn[ore], srcs, ext?" x":"");
+            else        fmt(d,"SHLR ??%d (trap)", ore);
+            FINISH;
+        }
+        if (ocode == 18) {  // MOVG3 (mcu_opcodes.cpp:1041, d=1): 写 / XCH（非读）
+            if (top==0xa0 && siz)      fmt(d,"XCH r%d r%d%s", ore, reg, ext?" x":"");
+            else if (top==0xa0)        fmt(d,"MOVG3 ?? (trap: direct byte)");
+            else                       fmt(d,"MOVG3 r%d -> %s%s", ore, srcs, ext?" x":"");
+            FINISH;
+        }
+        // 其余（MOVG2 读式 16、算术 4/5/6/7/8/10/12/14、扩展 20-23 等）: r<ore> 为寄存器，正确
+        fmt(d,"%s %s r%d%s%s",OPC_NAME[ocode&31],srcs,ore,ext?" x":"",imms);
         FINISH;
     }
     fmt(d,"??0x%02x",op); FINISH;
@@ -192,6 +269,21 @@ int main(int argc, char **argv) {
     edge_count = nedges;
     fprintf(stderr, "exec=%ld lines=%lu edges=%lu\n", nexec, nedges, edge_count);
     fprintf(stderr, "phase: starts\n");
+
+    // optional 6th arg: machine-readable decode dump for every executed PC
+    //   pc len kind tpage toff top reg siz ocode ore ext
+    // kind: 0 none, 1 call, 2 uncond, 3 cond, 4 ret, 5 reg-indirect
+    if (argc > 6) {
+        FILE *mf = fopen(argv[6], "w");
+        for (int a = 0; a < AKEY_MAX; a++) {
+            if (!exec[a]) continue;
+            dec_t d; decode(a >> 16, a & 0xffff, &d);
+            fprintf(mf, "%08x %d %d %02x %04x %02x %d %d %d %d %d\n",
+                a, d.len, d.kind, d.tpage, d.toff,
+                d.top, d.reg, d.siz, d.ocode, d.ore, d.ext);
+        }
+        fclose(mf);
+    }
 
     // find run starts:
     //  1) executed PCs with in_deg == 0  (trace entry points)
