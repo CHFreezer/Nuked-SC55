@@ -106,3 +106,11 @@ Verify (C, replaces the old Python scripts):
 
 The directory is gitignored except this note (tracked so git keeps the folder
 in place); drop the `.txt` files here to make the verification step runnable.
+
+## Reference traces / snapshots (moved here from build/, 2026-09-11)
+
+- `trace_200m_base.txt` — stock GT trace `[200M, 202M)`, the 0-diff regression
+  oracle (GT: `-mk2 -demo -tracepc ... 200000000 202000000`).
+- `trace_boot3m_base.txt` — stock GT trace `[0, 3M)` (boot + first idle).
+- `probe_snap_page0.bin` / `probe_snap_page6.bin` — probe snapshots used to
+  verify page-6 backing (unbacked vs `b_ram`) with `probe/memprobe_*`.

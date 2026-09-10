@@ -436,6 +436,9 @@ extern int mcu_jv880;
 extern int mcu_scb55;
 extern int mcu_sc155;
 extern int pcm_float; // S1: pure-float resonant filter, per-add ±1.0 saturation (independent of chip select)
+extern int pcm_ext_enabled; // 0 - stock 28-voice behavior; 1 - polyphony extension (in-memory ROM patch)
+extern int pcm_ext_voices;  // extended-mode target voice count (28..PCM_MAX_VOICE)
+extern int pcm_ext_active;  // 1 once the in-memory ROM patch has actually been applied
 
 extern SDL_atomic_t mcu_button_pressed;
 

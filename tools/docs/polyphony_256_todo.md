@@ -8,6 +8,8 @@
 
 **施工规则（2026-09-11，用户指示）**：一旦遇到"明确阻碍"（模型不清、行为无法解释、需要靠二分/试错定位），**立即停止实现，退回研究**：写清问题 → 产出带证据的文档（新 research 文件或补进现有文档）→ 定稿后才恢复实现。禁止在文档不完整时继续盲改。
 
+**目录卫生规则（2026-09-11，用户指示）**：`build/` 只保留构建系统与运行资产（exe/pdb/rom/waverom/SDL2）。**所有调试产物**（trace/log/out/snapshot/dump）一律写到 `%TEMP%\opencode\` 或 `build/debug/`（并在任务收尾时清空）；基准 fixture 放 `tools/baselines/`（trace 文本与 probe 快照）。**注意：GT 以 exe 所在目录作为 ROM BasePath（启动打印 `Base path is:`），所有可执行基线必须留在 `build/`（与 rom1/rom2/rom_sm/waverom 同目录），移走会因找不到 ROM 而黑屏。**
+
 ---
 
 ## R21-R23 研究补全（2026-09-11）— 三份权威文档，施工前必读

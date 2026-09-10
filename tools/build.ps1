@@ -5,24 +5,15 @@ $clang = "C:\Program Files\LLVM\bin\clang.exe"
 if (-not (Test-Path $clang)) { $clang = "clang" }
 
 $targets = @(
-    @{ Out = "vm\h8vm.exe";         Src = @("vm\h8vm_main.c", "vm\h8vm_body.c", "vm\h8vm_sm.c", "vm\h8vm_pcm.c") },
-    @{ Out = "disasm\h8dasm.exe";  Src = @("disasm\h8dasm.c") },
-    @{ Out = "diff\extract_pc.exe"; Src = @("diff\extract_pc.c") },
-    @{ Out = "diff\extract_flow.exe"; Src = @("diff\extract_flow.c") },
-    @{ Out = "diff\pcdiff.exe";     Src = @("diff\pcdiff.c") },
-    @{ Out = "diff\readdiff.exe";   Src = @("diff\readdiff.c") },
-    @{ Out = "diff\ramdiff.exe";    Src = @("diff\ramdiff.c") },
-    @{ Out = "diff\seq.exe";        Src = @("diff\seq.c") },
-    @{ Out = "diff\seqdiff.exe";    Src = @("diff\seqdiff.c") },
-    @{ Out = "diff\collapse.exe";   Src = @("diff\collapse.c") },
-    @{ Out = "diff\segdump.exe";    Src = @("diff\segdump.c") },
-    @{ Out = "diff\segdiff.exe";    Src = @("diff\segdiff.c") },
-    @{ Out = "misc\dumpbanner.exe"; Src = @("misc\dumpbanner.c") },
-    @{ Out = "misc\findstr.exe";    Src = @("misc\findstr.c") },
-    @{ Out = "misc\missctx.exe";    Src = @("misc\missctx.c") },
-    @{ Out = "misc\missentry.exe";  Src = @("misc\missentry.c") },
-    @{ Out = "misc\misspc.exe";     Src = @("misc\misspc.c") },
-    @{ Out = "misc\rtstarget.exe";  Src = @("misc\rtstarget.c") }
+    @{ Out = "vm\h8vm.exe";                  Src = @("vm\h8vm_main.c", "vm\h8vm_body.c", "vm\h8vm_sm.c", "vm\h8vm_pcm.c") },
+    @{ Out = "disasm\h8dasm.exe";           Src = @("disasm\h8dasm.c") },
+    @{ Out = "disasm\smdasm.exe";           Src = @("disasm\smdasm.c") },
+    @{ Out = "disasm\logproc.exe";          Src = @("disasm\logproc.c") },
+    @{ Out = "verify\verify_dasm.exe";      Src = @("verify\verify_dasm.c") },
+    @{ Out = "probe\memprobe_gen.exe";      Src = @("probe\memprobe_gen.c") },
+    @{ Out = "probe\memprobe_map.exe";      Src = @("probe\memprobe_map.c") },
+    @{ Out = "probe\memprobe_read.exe";     Src = @("probe\memprobe_read.c") },
+    @{ Out = "probe\smvec_check.exe";       Src = @("probe\smvec_check.c") }
 )
 
 $failed = 0

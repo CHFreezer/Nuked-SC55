@@ -185,6 +185,9 @@ int mcu_jv880 = 0; // 0 - SC-55, 1 - JV880
 int mcu_scb55 = 0; // 0 - sub mcu (e.g SC-55mk2), 1 - no sub mcu (e.g SCB-55)
 int mcu_sc155 = 0; // 0 - SC-55(MK2), 1 - SC-155(MK2)
 int pcm_float = 0; // S1: pure-float resonant filter, per-add ±1.0 saturation (independent of chip select)
+int pcm_ext_enabled = 0; // 0 - stock 28-voice behavior; 1 - polyphony extension (in-memory ROM patch, -voices:<n>)
+int pcm_ext_voices = 28; // extended-mode target voice count (28..PCM_MAX_VOICE)
+int pcm_ext_active = 0;  // 1 once the in-memory ROM patch has actually been applied (see MCU_PatchROM)
 float master_gain = 1.0f; // overall output volume multiplier (linear), applied in MCU_PostSample before int16 clamp
 
 static int ga_int[8];
@@ -210,7 +213,7 @@ static uint64_t demo_start = 144000000;  // first-event cycle (default 144M, min
 
 // (-mocknote [cycles]): post a MIDI note-on (0x90, note 60, vel 100) into the
 // shared UART so the SM's UART RX path runs without a MIDI device. Off by
-// default. Default cycle 144M (6s) — after the ~5s LCD splash, so a reset-time
+// default. Default cycle 144M (6s) �?after the ~5s LCD splash, so a reset-time
 // note is not lost. The SC-55mk2 rejects MIDI while in the demo phase, so to
 // take effect the note must fire BEFORE the -demo start. Only effective in
 // from-reset runs (a -loadsnap overwrites the buffer; the timer restarts from
@@ -651,6 +654,9 @@ uint8_t ram[RAM_SIZE];
 uint8_t sram[SRAM_SIZE];
 uint8_t nvram[NVRAM_SIZE];
 uint8_t cardram[CARDRAM_SIZE];
+static uint8_t b_ram[0x10000];  // polyphony extension: 64KB backing for H8 page 6 (tp=6)
+static uint8_t b_ram2[0x10000]; // polyphony extension: 64KB backing for H8 page 7 (tp=7)
+
 
 int rom2_mask = ROM2_SIZE - 1;
 
@@ -675,6 +681,10 @@ static uint8_t MCU_Read_impl(uint32_t address)
                 if (address >= base && address < (base | 0x400))
                 {
                     ret = PCM_Read(address & 0x3f);
+                }
+                else if (pcm_ext_active && !mcu_jv880 && address >= 0xe800 && address < 0xe840)
+                {
+                    ret = PCM_ReadExt(address & 0x3f);
                 }
                 else if (!mcu_scb55 && address >= 0xec00 && address < 0xf000)
                 {
@@ -829,6 +839,15 @@ static uint8_t MCU_Read_impl(uint32_t address)
         else
             ret = 0xff;
         break;
+    case 6:
+        // Polyphony extension: 64KB extended RAM page (reached via tp=6).
+        // Stock ROM never touches it; gated so default behavior is unchanged.
+        ret = pcm_ext_enabled ? b_ram[address] : 0x00;
+        break;
+    case 7:
+        // Polyphony extension: second 64KB extended RAM page (reached via tp=7).
+        ret = pcm_ext_enabled ? b_ram2[address] : 0x00;
+        break;
     default:
         ret = 0x00;
         break;
@@ -917,7 +936,7 @@ void MCU_Write(uint32_t address, uint8_t value)
                         if ((reg <= 3) || reg == 0x3c || reg == 0x3d || reg == 0x3e)
                         {
                             static FILE *tf = nullptr;
-                            if (!tf) tf = fopen("pcm_trace.log", "w");
+                            if (!tf) { tf = fopen("pcm_trace.log", "w"); if (tf) setvbuf(tf, NULL, _IONBF, 0); }
                             if (tf)
                                 fprintf(tf, "pcm reg=%02x val=%02x pc=%02x:%04x cyc=%llu\n",
                                         (int)reg, (int)value, (int)mcu.cp, (int)mcu.pc,
@@ -925,6 +944,10 @@ void MCU_Write(uint32_t address, uint8_t value)
                         }
                     }
                     PCM_Write(address & 0x3f, value);
+                }
+                else if (pcm_ext_active && !mcu_jv880 && address >= 0xe800 && address < 0xe840)
+                {
+                    PCM_WriteExt(address & 0x3f, value);
                 }
                 else if (!mcu_scb55 && address >= 0xec00 && address < 0xf000)
                 {
@@ -1030,6 +1053,14 @@ void MCU_Write(uint32_t address, uint8_t value)
     else if (page == 14 && mcu_jv880)
     {
         cardram[address & 0x7fff] = value; // FIXME
+    }
+    else if (page == 7 && pcm_ext_enabled)
+    {
+        b_ram2[address] = value;
+    }
+    else if (page == 6 && pcm_ext_enabled)
+    {
+        b_ram[address] = value;
     }
     else
     {
@@ -1380,6 +1411,7 @@ int SDLCALL work_thread(void* data)
             SM_PostUART(100);
             mocknote_done = true;
             printf("mocknote: posted note-on at c%llu\n", (unsigned long long)mcu.cycles);
+            fflush(stdout);
         }
 
         // ---- snapshot dump trigger (-savesnap <cycles>) ----
@@ -1511,6 +1543,11 @@ static void MCU_Run()
 
 void MCU_PatchROM(void)
 {
+
+    // Polyphony extension (-voices:<n>): the in-memory ROM patch is applied
+    // here once implemented (see tools/docs/polyphony_255_feasibility.md).
+    // pcm_ext_active stays 0 until the patch content is actually in place, so
+    // that GT keeps stock behavior for a flag without a working patch.
     //rom2[0x1333] = 0x11;
     //rom2[0x1334] = 0x19;
     //rom1[0x622d] = 0x19;
@@ -1832,6 +1869,19 @@ int main(int argc, char *argv[])
             {
                 pcm_float = 1;
             }
+            else if (!strncmp(argv[i], "-voices:", 8))
+            {
+                int n = atoi(argv[i] + 8);
+                if (n < 28 || n > PCM_MAX_VOICE)
+                {
+                    fprintf(stderr, "warning: -voices:%d out of range (28..%d), ignored\n", n, PCM_MAX_VOICE);
+                }
+                else
+                {
+                    pcm_ext_voices = n;
+                    pcm_ext_enabled = (n != 28);
+                }
+            }
             else if (!strcmp(argv[i], "-demo"))
             {
                 demo_seq_enabled = true;
@@ -1972,6 +2022,11 @@ int main(int argc, char *argv[])
                        "                                 <cycles>.\n");
                 printf("  -loadsnap <file>               Load the full machine state from <file> at start\n"
                        "                                 (a keyless run starts from the exact saved state).\n");
+                printf("\n");
+                printf("Polyphony extension:\n");
+                printf("  -voices:<n>                    Set polyphony to <n> voices (default 28, range 28..255).\n"
+                       "                                 n != 28 applies an in-memory ROM patch; the disk ROM is\n"
+                       "                                 never modified. n == 28 keeps stock behavior.\n");
                 return 0;
             }
             else if (!strcmp(argv[i], "-sc155"))
@@ -2304,3 +2359,4 @@ int main(int argc, char *argv[])
 
     return 0;
 }
+

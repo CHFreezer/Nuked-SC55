@@ -19,7 +19,8 @@ static uint8_t sram[SRAM_SIZE];
 static uint8_t dev[0x100];
 static uint8_t ram[0x400]; // nukeykt RAM_SIZE work RAM (page 0 0xfb80-0xfff7 when RAME set)
 static const int BRAM_SIZE = 0x10000;
-static uint8_t b_ram[BRAM_SIZE]; // 方案A: 64KB extended RAM backing page 6 (was unbacked: rd 0xff / write dropped)
+static uint8_t b_ram[BRAM_SIZE];  // 方案A: 64KB extended RAM backing page 6 (was unbacked: rd 0xff / write dropped)
+static uint8_t b_ram2[BRAM_SIZE]; // D1: second 64KB extended RAM backing page 7
 
 // UART: shared buffer (defined in h8vm_sm.c). On SC-55 the SM sub-CPU consumes
 // host/MIDI bytes from it; the main MCU's own UART RX is not used.
@@ -458,6 +459,9 @@ static uint8_t MCU_Read_impl(uint32_t address)
     case 6:
         /* 方案A: extended RAM page (was unbacked). */
         return b_ram[off];
+    case 7:
+        /* D1: second extended RAM page. */
+        return b_ram2[off];
     case 10:
     case 11:
         /* SC-55mk2 (mcu_mk1==0): pages 10/11 mirror sram. */
@@ -571,6 +575,11 @@ void MCU_Write(uint32_t address, uint8_t value)
     {
         /* 方案A: extended RAM page (was unbacked). */
         b_ram[off] = value;
+    }
+    else if (page == 7)
+    {
+        /* D1: second extended RAM page. */
+        b_ram2[off] = value;
     }
     // rom2 is read-only; ignore writes there.
 }
