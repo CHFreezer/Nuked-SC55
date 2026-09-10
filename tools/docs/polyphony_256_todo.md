@@ -6,6 +6,21 @@
 
 **总原则**：阶段 0（研究）未定稿前，不进阶段 1/2 实现。每勾一项，在 `mk2_polyphony_256.md` 对应章节补证据（地址/字节/GT 行号），本表只记状态。
 
+**施工规则（2026-09-11，用户指示）**：一旦遇到"明确阻碍"（模型不清、行为无法解释、需要靠二分/试错定位），**立即停止实现，退回研究**：写清问题 → 产出带证据的文档（新 research 文件或补进现有文档）→ 定稿后才恢复实现。禁止在文档不完整时继续盲改。
+
+---
+
+## R21-R23 研究补全（2026-09-11）— 三份权威文档，施工前必读
+- `voice_memory_map.md`：**28 个 AoS 语音结构体，每个 0x12a 字节，SRAM [0xad2e,0xcdc6)**；ROM1 `0x64d6` 为 28 项 big-endian 指针表（`P-2`=槽号，v 覆盖 `[P-0x80,P+0xAA)`）。容量 28 的硬原因：槽 28 起于 `0xcdc6` 正好压到 SoA 数组。`r1=0xcc9c@0x3970` = `P(27)-0x80`。
+- `voice_bounds_inventory.md`：逐站点语义。**现有界值表错误项**：`0x0404c8`（descriptor-pool 种子，非循环界）、`0x04135c`（PCM select 硬件循环，仅 ≤31 有效）；**缺失项**：`0x045cde cmp r0,b #0x1c`（应=N=0xff）、`0x4331b/0x43326/0x433ed/0x43644`（32 宽循环，N>32 才改）。`0x64d6` 表止于 0x650d（pitch 表紧随）→ 解释了"只放宽界值"时 `r0=0x25ad` 崩溃。
+- `task_irq_map.md`：mask 契约（regs0..3=32 位；态 d150/d152+d154/d156；置位 0x546E；提交 0x54FB/0x564A）；GT 扩展窗口 ext 0x00..0x1B→mask 字节 4..31（32..63 走 0xE800+0..3）。**>32 必须改固件 mask 路径**（≤64 逐字节补丁：7 调用点 + 0x7DC4/0x7E12/0x7E63 三例程 + 0x9D80~0x9D87 状态）。验收 oracle：LCDEN≈4.22M、isr≈1382/20M、cfg3d=n-1、有音符驱动的 mask 写、215M 不复位。
+
+### 施工顺序（机械执行，不再二分）
+1. 修 `tools/gen_reloc.c` 界值表：删 `0x0404c8`；`0x04135c` 仅 N≤31；加 `0x045cde`=N；`0x4331b/0x43326/0x433ed/0x43644` 仅 N>32。
+2. N=32：重定位 32 个 AoS 结构体（stride 0x12a，起 0xad2e）+ 冲突 SoA 数组；建 32 项指针表并补丁所有 `0x64d6` 读取点；config=0x1f。
+3. N∈(32,64]：叠加 mask 路径补丁；结构体扩到 N。
+4. 4 项 oracle 全过才算完成。
+
 ---
 
 ## 阶段 0 — 阻塞研究（决定阶段 1/2 怎么做）
@@ -122,8 +137,20 @@
 - [x] 勘误：数组需 **`[MAX_VOICE+5]`**；R13 硬编码补 `pcm.cpp:1044/:1520`；`0x5e20/0x5ee7`=值源非写点
 - [ ] 实现：生成 0x3f patch 清单（E 点）+ GT 0x3f 分支
 
-**R18 B 内 `@r6/@r7` page0 表访问全扫（实现时）**
-- [ ] 对 41 片段全扫 `@r6/@r7+disp`（已知 4 处：`0x05f4/0x1bfe/0x1310` 等）→ 逐个搬表或改 dp 基
+**R18 B 内 `@r6/@r7` page0 表访问全扫 ✅ 2026-09-11（mk2 §6.6 补充）**
+- [x] 闭包（41 片段 + d1ac 族）内**没有** `@r6/@r7` 访存（会被 tp=6 改页）；全 ROM 的 20 处 `@r6/@r7` 访存全部在闭包外（0x23b-0x1f02：boot/handler/其它例程）→ **无需搬表/镜像**
+- [x] `r6` 在闭包内被大量当 temp 用（审计 512 行）→ B 重写策略：**按片段寄存器重映射**（数组索引寄存器 → r6，原 r6 用途按生存期改派到空闲 dp 寄存器）；需带 decode/encode 的 C 重写器 `tools/bgen`
+- [x] 数组搬/留决策（修订 R8）：**`d1a6`、`d1ac` 留在 SRAM 不搬**（访问者全在闭包外；d1ac helper 族因此**不进 B**，R16 缺口消项）；`d435`/`64d6` 及 R8 其余数组随 B 搬 page6（R8 布局表中 d1a6/d1ac 两行释放）
+- [x] **搬移表最终版**（闭包内 `@rN+disp16` 全量枚举 = 205 地址）：
+  - **搬 page6（per-voice）**：`a34c`（**新发现，旧表漏**，字节）、`a368/a384/a3a0/a3bc/a3d8/a3f4/a410`、`a46c(W)`、`a4aa/a4b4/acf2/ad0e`、`cdc6(W)/cdfe(W)/ce3f/ce5c/ce78/ce94/ceb0/cecc/cee8/cf04/cf20/cf3c/cf58(W)/cf90/cfac(W)/cfe4`、`d000(W)/d038/d054(W)/d08c/d0a8/d0c4/d0e0/d0fc/d118/d134/d15c`、`64d6(W)`
+  - **搬 page6（per-voice 描述符池，2026-09-11 修正）**：`a250/a26c/a288/a2a4/a2c0/a2dc/a2f8/a314/a330`（loop D 以 28 次初始化、索引走 `a42e` 链 → 随复音数扩到 255；⚠ 旧"a2xx 全留 SRAM"有误）。page6 布局：`0x3500 a250 / 0x3600 a26c / 0x3700 a288 / 0x3800 a2a4 / 0x3900 a2c0 / 0x3a00 a2dc / 0x3b00 a2f8 / 0x3c00 a314 / 0x3d00 a330`（各 256B）
+  - **留 SRAM（保持 dp）**：`a040-a240` + `a200/a210/a220/a230/a240`（loop E 以 **16 次**初始化 = per-part）、`a43c/a44c`(per-part 16)、`a1b0`(part)、`a1d0/a1df/a1f0/a1f4`(全局标量)、`abde/ac0e/ac4e`、`dc76-dd7c/de4c/de6c`、`8018`、`ffc5`(设备)
+  - **ROM 表（`<0x8000`，必须保持 dp；B 内不得改基址）**：`650e/652e/653a`、`673a/683c/6854/686c/687a/6883/6903/6a03/6a84/6c86-7aee`、`9060-9740`(56×0x20 系数)、`522c/1432/0100/0280/0300/0380/0004/0080-00a8`
+  - `d1ac` 属 d1ac helper 族（留 SRAM）→ 该族**不入 B**；`d435` 经 `movi/ADD #imm` 形式（reset）单独处理
+  - 布局补：`a34c → page6 0x3340`（256B）；其余按 mk2 §6.5 R8 表
+- [x] **重写器 v1 落地（GT 内置 `src/patch_256.cpp`）**：H8 子集 decode + `@rN+disp16`（f0–ff，bit3=size）→ `MOVG2 rX->r6` + page6 disp；相对分支（cntjmp/Bcc/bsr/bsr16）两遍定址修正；入口 wrapper（`bf 98 0c 07 00 48 04 06 8f`）+ 顶层 ret 内联 epilogue；界印 n；pool-init 片段（`0x40462-0x4062b`）已重写、`b_dump.bin` 反汇编核对通过；默认 200-202M trace 逐字节一致
+- [ ] 把其余 40 个片段纳入 `kFrags`（含 entry/exit 类型）并逐批启用；`g_all_enabled=1` 后安装/重定向/置 `pcm_ext_active`
+- [ ] 特别项：`0x45cbe` 搜索循环、IRQ0 handler（R15）、效果 `3e→3f`（R17）、`d435` 立即数形态、混合基址（r6 被占用的片段需暂存/改派）
 
 **R19 中断屏蔽窗口时序影响（实现时，可实验）**
 - [ ] B 全程 IML=7 → FRT tick/MIDI 延迟=例程时长；VM 实验量化，确认固件无时序依赖
@@ -134,18 +161,17 @@
 
 ---
 
-## 阶段 1 — GT（src/）实现（顺序见 mk2 §6.5 R10）
-- [ ] `#define MAX_VOICE 255`（§6.5 R12）+ 效果槽外置（数组 **`MAX_VOICE+5`（≥260）** + `EFF_BASE`，默认 28；§6.6 R17 勘误）
-- [ ] 数组扩宽 `ram1/ram2/fstate`（pcm.h:25-26,52）→ 默认路径 0-diff
-- [ ] `voice_mask/pending` → 256-bit（byte[32] 或 uint32[8]）+ latch 整 32B；低 32bit 主窗口（⚠ reg0 现只写 `data&0xf` → voice28-31 缺口须补）
-- [ ] `mcu.cpp` 增 `0xe800-0xe83f`（br=0xe8）→ `PCM_WriteExt/PCM_ReadExt`（mcu.cpp:678/928 后插；⚠ VM 现落 sram[0x6800]，先加分支）
-- [ ] `reg_slots` **模式开关**（默认公式 `(val&31)+1` 不动；扩展 `val+1`；pcm.cpp:536）`select_channel` 去 `&0x1f`（pcm.cpp:126）；**reg 0x3f 写 = `EFF_BASE+(v&3)`**（§6.6 R17）
-- [ ] 效果槽外置 `EFF_BASE`（~200 处 `ram1/2[28..31]` 替换；`slot2` last 门控；**补 `pcm.cpp:1044`**；`pcm.cpp:1617 cycles` 钳 28 保 66207Hz）
-- [ ] PCM status/IRQ（§6.6 R15）：`status |= irq_channel & 0x1f`（0-diff）；`PCM_ReadExt(0xe820)=irq_channel&0xff`（供 B handler）
-- [ ] page6 `b_ram`（mcu.cpp；零初始化；VM 同款✅）；tp=6 仅 B 例程内
-- [ ] `MCU_PatchROM()`（**mcu.cpp:1512，加载后 :2291**）：建 B（fileoff `0x60000+`，**闭包 26 逻辑/41 碎片 + d1ac helper 族 4 入口**，§6.5 R11/§6.6 R16）+ A→B `pjmp #0x0E`（19 入口+`0x45cbe`；wrapper/蹦床 + 中断 wrapper §6.5 R5/R7）+ `rom2_mask`
-- [ ] 快照：`pcm_t` 尺寸变 → `demo_postW.bin` 不兼容（重录）
-- [ ] CLI `-voices:<n>`（**已定：范围 28–255 真生效**，单横线冒号风格；n≠28 才建 B；生成时把 n 印进所有界/config；`-voices:28`=默认）
+## 阶段 1 — GT（src/）实现 ✅ 2026-09-11 完成（默认路径 200M-202M trace 与基准逐字节一致）
+- [x] `MAX_VOICE 255` + 效果槽外置（`PCM_SLOTS 260`、`PCM_EFF_BASE 256`；pcm.h）
+- [x] 数组扩宽 `ram1/ram2/fstate` = PCM_SLOTS（pcm.h）
+- [x] `voice_mask/pending` → `uint8_t[32]` + latch `memcpy` 32B；主窗口 reg0 默认 `&0xf`（扩展模式全字节）
+- [x] `mcu.cpp`：`0xe800-0xe83f` → `PCM_WriteExt/ReadExt`（`pcm_ext_active` 守护）；**page6 `b_ram` 64KB**（`pcm_ext_enabled` 守护）
+- [x] `reg_slots` 模式开关（active `config+1`；默认 `(config&31)+1`）；**`cycles` 钳 28**；`select_channel` 扩展 0..255 / 库存 28..31→EFF 重映射；**reg 0x3f 别名** `EFF_BASE+(v&3)`
+- [x] 效果槽外置（~217 处 `ram1/2[28..31]`→`PCM_EFF_BASE+0..3`；`slot2`/`case` = EFF+3；**新增 `pcm_mod_slot()`**：两处 `&31` 调制源索引映射到 EFF 行——实现时发现的真实差异点）
+- [x] status `irq_channel & 0x1f`；`PCM_ReadExt(0x20)`=完整 slot、（0x21）=active
+- [x] CLI `-voices:<n>`（28–255 校验，n≠28 置 enabled）；`MCU_PatchROM` 挂点（当前打印 note，`pcm_ext_active` 保持 0 直到 B 补丁落地）
+- [x] 快照不兼容记录（`pcm_t` 尺寸变，旧 `demo_postW.bin` 弃用）
+- 证据：步骤 1-4 默认 trace 140-150M 逐字节一致；步骤 5-7 默认 trace **200-202M 逐字节一致**；**EFF=256 vs EFF=28 的 200M 快照强等价**（差异仅在效果槽且配对完全相等，eram/accum/rcsum/fstate 零差异）
 
 ## 阶段 2 — ROM patch（`MCU_PatchROM` 内，**(ii) 最终版**，清单 mk2 §6.3/§6.4）
 - [ ] `0x1432`:`c3 7b`→`c3 <n-1>`（扩展模式 reg_slots=n；GT 模式开关驱动）
@@ -172,7 +198,8 @@
 - [ ] **探针 legacy matrix 单 sentinel 弱点**：`WRITABLE iff rb==0xA5` 对只读 ROM 页 off+1 处恰为 0xA5 的字节会误判（当前 rom1/rom2 无此情形，见 `mk2_polyphony_256.md` 附2）；**换 ROM 或复用探针时**加固（第二 sentinel 或 matrix 改 0x80/0x98 字节精确）
 
 ## 约定
-- **GT 运行规范（用户要求，2026-09-11）**：验证/诊断 GT 时 **不得无头运行**——正常启动（**LCD 窗口 + 声音输出**）+ **超时自动 kill**；用户现场观察协助诊断（详见 `plan_256.md` §6）。禁止 headless/静默模式替代。
+- **GT 运行规范（用户要求，2026-09-11）**：验证/诊断 GT 时 **不得无头运行**——正常启动（**LCD 窗口 + 声音输出**）+ **超时自动 kill**；用户现场观察协助诊断（详见 `plan_256.md` §6）。禁止 headless/静默模式替代。**超时按 24MHz 换算**（`cycles/24e6` 秒 ×≈2，如 200M→20s），不要固定长等待。
+- **启动时间窗（用户提示，2026-09-11）**：初次上电 LCD 动画 ≈5s（≈120M cycles）**期间不接受 note/MIDI**；开关电源一次后再开机**无动画**；`-demo` 按键 ≈6s 开始、8s 结束（144M–192M）；**`-demo` 在 200M 仍未开始发演示曲目声音，声音验证取样 ≥300M（≈12.5s，必有 PCM 输出）**。⇒ 状态对比 ≥200M，音频/听感 ≥300M（详见 `plan_256.md` §6）。
 - 遇矛盾按 `evidence_protocol.md`：先列假设 → 机械位展开 → 以 ROM+src 为准；VM/dasm/旧文档不作证明。
 - 结论用三档置信度（Confirmed / Strongly supported / Inferred），不合并表述。
 - **自制工具优先 C**（与 GT/VM 类型零 gap、静态类型；见 `evidence_protocol.md` §14），不用 Python。
