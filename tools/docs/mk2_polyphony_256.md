@@ -456,6 +456,9 @@ A（已在内存）                B（新，追加于 A 空闲区）
 
 ## 7. 验证计划
 
+> **运行约定（用户要求，2026-09-11，详见 `plan_256.md` §6）**：验证/诊断 GT（nuked-sc55）时**不得无头运行**——必须正常启动（**LCD 窗口 + 声音输出**）+ **超时自动 kill**，用户现场观察（看/听）协助诊断。禁止 headless/静默模式替代。
+
+
 1. **PCM 写追踪**（`-pcmtrace` 已补回，见附）：patch 后跑 `-voices:<n> -demo -mocknote -pcmtrace`，确认固件写 `config_reg_3d`→n-1、`select_channel` 用到 0..(n-1)、voice_enable 覆盖 n bit。
 2. **快照校验**：dump `demo_postW.bin` 的 `config_reg_3d`、SRAM note 表（256 项）、`sram` 占用，确认 B 表就位。
 3. **音频回归**：

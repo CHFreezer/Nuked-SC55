@@ -130,6 +130,7 @@
 
 **R20 性能与验收（阶段 3 前置）**
 - [ ] 模拟器 CPU ×9 实测；≥255 音符 MIDI 测试素材与判定标准；默认 28 的 VM↔GT diff 工具链搭建
+- [ ] **GT 运行规范（用户要求，2026-09-11）**：验证/诊断时 **GT 不得无头运行**——必须正常启动（**LCD 窗口 + 声音输出**）+ **超时自动 kill**；用户现场观察协助诊断。禁止 headless/静默模式替代（细节见 plan_256.md §6）
 
 ---
 
@@ -171,6 +172,7 @@
 - [ ] **探针 legacy matrix 单 sentinel 弱点**：`WRITABLE iff rb==0xA5` 对只读 ROM 页 off+1 处恰为 0xA5 的字节会误判（当前 rom1/rom2 无此情形，见 `mk2_polyphony_256.md` 附2）；**换 ROM 或复用探针时**加固（第二 sentinel 或 matrix 改 0x80/0x98 字节精确）
 
 ## 约定
+- **GT 运行规范（用户要求，2026-09-11）**：验证/诊断 GT 时 **不得无头运行**——正常启动（**LCD 窗口 + 声音输出**）+ **超时自动 kill**；用户现场观察协助诊断（详见 `plan_256.md` §6）。禁止 headless/静默模式替代。
 - 遇矛盾按 `evidence_protocol.md`：先列假设 → 机械位展开 → 以 ROM+src 为准；VM/dasm/旧文档不作证明。
 - 结论用三档置信度（Confirmed / Strongly supported / Inferred），不合并表述。
 - **自制工具优先 C**（与 GT/VM 类型零 gap、静态类型；见 `evidence_protocol.md` §14），不用 Python。
