@@ -15,7 +15,14 @@
 - `voice_bounds_inventory.md`：逐站点语义。**现有界值表错误项**：`0x0404c8`（descriptor-pool 种子，非循环界）、`0x04135c`（PCM select 硬件循环，仅 ≤31 有效）；**缺失项**：`0x045cde cmp r0,b #0x1c`（应=N=0xff）、`0x4331b/0x43326/0x433ed/0x43644`（32 宽循环，N>32 才改）。`0x64d6` 表止于 0x650d（pitch 表紧随）→ 解释了"只放宽界值"时 `r0=0x25ad` 崩溃。
 - `task_irq_map.md`：mask 契约（regs0..3=32 位；态 d150/d152+d154/d156；置位 0x546E；提交 0x54FB/0x564A）；GT 扩展窗口 ext 0x00..0x1B→mask 字节 4..31（32..63 走 0xE800+0..3）。**>32 必须改固件 mask 路径**（≤64 逐字节补丁：7 调用点 + 0x7DC4/0x7E12/0x7E63 三例程 + 0x9D80~0x9D87 状态）。验收 oracle：LCDEN≈4.22M、isr≈1382/20M、cfg3d=n-1、有音符驱动的 mask 写、215M 不复位。
 
-### 施工顺序（机械执行，不再二分）
+### 255 路线（D1，见 `polyphony_255_feasibility.md`）
+- [x] **page7 backing**：GT `src/mcu.cpp` 增 `b_ram2[0x10000]`（case7 读/page==7 写，`pcm_ext_enabled` 守护）；VM `tools/vm/h8vm_main.c` 同步；默认路径 200–202M trace 逐字节一致。
+- [ ] 生成器扩展：**P-tracking AoS 访问点全量清单**（识别 `r0=P(v)-0x80` 型结构体访问：字段偏移 + 页归属）+ page-aware 指针表（32 项/255 项，page6/7 拆分）。
+- [ ] B-copy 机制按 D1 落地：AoS 字段访问改 `tp=7`（S 区）/`tp=6`（M 区），SoA 迁 page7；相对分支/返回/中断按既有教训重做（rel8 升长、帧约定、wrapper 无栈）。
+- [ ] mask 路径 255 补丁（task_irq_map.md 的 B-block route）。
+- [ ] O1–O10 验收矩阵全过。
+
+### 施工顺序（64 机器验证里程碑，复用同一机制）
 1. 修 `tools/gen_reloc.c` 界值表：删 `0x0404c8`；`0x04135c` 仅 N≤31；加 `0x045cde`=N；`0x4331b/0x43326/0x433ed/0x43644` 仅 N>32。
 2. N=32：重定位 32 个 AoS 结构体（stride 0x12a，起 0xad2e）+ 冲突 SoA 数组；建 32 项指针表并补丁所有 `0x64d6` 读取点；config=0x1f。
 3. N∈(32,64]：叠加 mask 路径补丁；结构体扩到 N。
