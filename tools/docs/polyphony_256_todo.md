@@ -104,20 +104,23 @@
 - [x] (ii) 成本量化：闭包 26 例程/8–12KB + 跨页 wrapper + 中断 wrapper + page6 13.3KB + R9 mask
 - [x] **决策**：flag=`-voices:<n>`（单横线冒号，28–255）；B 由 C 生成器按 n 参数化（界/config 印入）；GT `reg_slots` 用模式开关（默认公式不动，扩展 `val+1`）；验证 28/255 必测 + 中间值抽测
 
-**R15 PCM 中断通道号 >31（阶段 0，可能影响设计；已实证存在）**
-- [ ] 事实（dasm `0x524-0x531`）：IRQ0 handler 读 `(br,$3e)`（PCM status）→ `AND #0x1f` → `d15c[ch]=0xff`；255 模式下低 5 位截断，且 GT status bit5（updating）会被高位通道号污染
-- [ ] 需定：GT 经扩展窗口给完整通道号 + **IRQ0 向量/handler 重定向到 B 改写版**（handler 不在现闭包内）
-- [ ] 影响：B 新增 handler；GT status 协议；A→B 向量重定向（rom1 0x0080）
+**R15 PCM 中断通道号 ✅ 2026-09-11 闭合（mk2 §6.6；方案已定）**
+- [x] d15c = **PCM IRQ pending 标志**（非 find-free；旧标签作废）；全 ROM 仅 6 处字面访问；固件不需完整声部号（`0x536 MOVE #2` 覆盖）；唯一故障 = `AND #0x1f` 截断下标
+- [x] PCM status 消费者仅 3 处（`0x529`/`0x41359`/`0x413b1`）；IRQ0 仅 PCM（level=7 不嵌套）
+- [x] 方案：ext `0xe820`=完整 slot + `status&0x1f`；B handler 先读 ext 再 ack → 写 page6 d15c → `pjmp 0:0x3db`
+- [ ] 实现二选一：(a-2) `0x529` 原地 4B pjmp（22B B 续体，推荐最小）｜(a-1) IRQ0 向量 `rom1[0x80]`→B 全 handler（29B）
 
-**R16 闭包完整性静态扫描（阶段 0，最大风险）**
-- [ ] 26 例程来自已执行 trace；**未执行路径**可能也碰数组
-- [ ] 方法：全 ROM 原始字节搜数组 disp16 模式（`f0-fb` 前缀 + `a3 68` 等），与 222 点对照补漏
-- [ ] 影响：B 最终例程集/规模可能增加
+**R16 闭包完整性 ✅ 2026-09-11 闭合（mk2 §6.6；补 d1ac helper 族）**
+- [x] 全 ROM 静态扫描（disp16 + 立即数基址）：`d435/d1ac` **无 disp16 引用**（只能按 `movi/ADD #base` 扫）
+- [x] 15 个"已执行漏计"点（`64d6/cfac/cfe4`）全在既有闭包内；69 个"未执行"点 ~60 在既有例程未执行臂内
+- [x] **唯一新缺口 = d1ac helper 族 4 入口** `0x43695/0x436a3/0x436c3/0x436d5` → 并入 B
+- [ ] 实现要求：**整例程本体搬运**（含未执行臂），不是只搬 trace 片段
 
-**R17 效果通道编程点全表（阶段 0）**
-- [ ] 全量列 `(br,$3e)` 写入点并分类（voice / effect / per-frame；§2.2 仅抽样）
-- [ ] 设计效果写入改到扩展通道寄存器（EFF_BASE=256 后，28/29/30 不再可用）
-- [ ] 影响：A→B 重定向点可能增加
+**R17 效果通道 ✅ 2026-09-11 闭合（mk2 §6.6；方案改优：0x3f 别名）**
+- [x] 全量 66 写入点（执行 42）+ 3 status 读；V=16/E=42（含 6 读回）/C=8；效果簇 `0x5ddc-0x64c3` **不在闭包**
+- [x] 方案：GT 扩展模式 reg **0x3f** 写 = `select_channel=EFF_BASE+(v&3)`；**E 点原地 1B patch `3e→3f`**（含 6 读回点），不搬效果簇、不需 0xe800 扩通道
+- [x] 勘误：数组需 **`[MAX_VOICE+5]`**；R13 硬编码补 `pcm.cpp:1044/:1520`；`0x5e20/0x5ee7`=值源非写点
+- [ ] 实现：生成 0x3f patch 清单（E 点）+ GT 0x3f 分支
 
 **R18 B 内 `@r6/@r7` page0 表访问全扫（实现时）**
 - [ ] 对 41 片段全扫 `@r6/@r7+disp`（已知 4 处：`0x05f4/0x1bfe/0x1310` 等）→ 逐个搬表或改 dp 基
@@ -131,20 +134,23 @@
 ---
 
 ## 阶段 1 — GT（src/）实现（顺序见 mk2 §6.5 R10）
-- [ ] `#define MAX_VOICE 255`（§6.5 R12）+ 效果槽外置（数组 `MAX_VOICE+4` + `EFF_BASE`，默认 28）
+- [ ] `#define MAX_VOICE 255`（§6.5 R12）+ 效果槽外置（数组 **`MAX_VOICE+5`（≥260）** + `EFF_BASE`，默认 28；§6.6 R17 勘误）
 - [ ] 数组扩宽 `ram1/ram2/fstate`（pcm.h:25-26,52）→ 默认路径 0-diff
 - [ ] `voice_mask/pending` → 256-bit（byte[32] 或 uint32[8]）+ latch 整 32B；低 32bit 主窗口（⚠ reg0 现只写 `data&0xf` → voice28-31 缺口须补）
 - [ ] `mcu.cpp` 增 `0xe800-0xe83f`（br=0xe8）→ `PCM_WriteExt/PCM_ReadExt`（mcu.cpp:678/928 后插；⚠ VM 现落 sram[0x6800]，先加分支）
-- [ ] `reg_slots` 公式分支（`val<0x80?(val&31)+1:val+1`，pcm.cpp:536）；`select_channel` 去 `&0x1f` + 效果通道扩展选择（pcm.cpp:126；§6.5 R10）
-- [ ] 效果槽外置 `EFF_BASE`（~200 处 `ram1/2[28..31]` 替换；`slot2` last 门控；`pcm.cpp:1617 cycles` 钳 28 保 66207Hz）
+- [ ] `reg_slots` **模式开关**（默认公式 `(val&31)+1` 不动；扩展 `val+1`；pcm.cpp:536）`select_channel` 去 `&0x1f`（pcm.cpp:126）；**reg 0x3f 写 = `EFF_BASE+(v&3)`**（§6.6 R17）
+- [ ] 效果槽外置 `EFF_BASE`（~200 处 `ram1/2[28..31]` 替换；`slot2` last 门控；**补 `pcm.cpp:1044`**；`pcm.cpp:1617 cycles` 钳 28 保 66207Hz）
+- [ ] PCM status/IRQ（§6.6 R15）：`status |= irq_channel & 0x1f`（0-diff）；`PCM_ReadExt(0xe820)=irq_channel&0xff`（供 B handler）
 - [ ] page6 `b_ram`（mcu.cpp；零初始化；VM 同款✅）；tp=6 仅 B 例程内
-- [ ] `MCU_PatchROM()`（**mcu.cpp:1512，加载后 :2291**）：建 B（fileoff `0x60000+`，**闭包 26 逻辑/41 碎片** §6.5 R11）+ A→B `pjmp #0x0E`（19 入口+`0x45cbe`；wrapper/蹦床 + 中断 wrapper §6.5 R5/R7）+ `rom2_mask`
+- [ ] `MCU_PatchROM()`（**mcu.cpp:1512，加载后 :2291**）：建 B（fileoff `0x60000+`，**闭包 26 逻辑/41 碎片 + d1ac helper 族 4 入口**，§6.5 R11/§6.6 R16）+ A→B `pjmp #0x0E`（19 入口+`0x45cbe`；wrapper/蹦床 + 中断 wrapper §6.5 R5/R7）+ `rom2_mask`
 - [ ] 快照：`pcm_t` 尺寸变 → `demo_postW.bin` 不兼容（重录）
 - [ ] CLI `-voices:<n>`（**已定：范围 28–255 真生效**，单横线冒号风格；n≠28 才建 B；生成时把 n 印进所有界/config；`-voices:28`=默认）
 
 ## 阶段 2 — ROM patch（`MCU_PatchROM` 内，**(ii) 最终版**，清单 mk2 §6.3/§6.4）
 - [ ] `0x1432`:`c3 7b`→`c3 <n-1>`（扩展模式 reg_slots=n；GT 模式开关驱动）
-- [ ] **B 块**（fileoff `0x60000+`，cp=0x0E）：闭包 **26 逻辑/41 碎片**（§6.5 R11 表）255/page6/tp=6 重写；基址寄存器→**r6**；入口/出口 wrapper（`STC r0 -> --r7`+`BSET_ORC #0x0700`+`LDC #6 r7` / `LDC #0`+`LDC r7++ r0`）；跨页返回 wrapper+TRAMP（rom1 尾 `0x7dc4+`）
+- [ ] **B 块**（fileoff `0x60000+`，cp=0x0E）：闭包 **26 逻辑/41 碎片 + d1ac helper 族 4 入口**（§6.5 R11/§6.6 R16；**整例程本体搬运含未执行臂**）255/page6/tp=6 重写；基址寄存器→**r6**；入口/出口 wrapper（`STC r0 -> --r7`+`BSET_ORC #0x0700`+`LDC #6 r7` / `LDC #0`+`LDC r7++ r0`）；跨页返回 wrapper+TRAMP（rom1 尾 `0x7dc4+`）
+- [ ] **IRQ0 改造**（§6.6 R15）：(a-2) `0x529` 原地 4B `13 0E hi lo` + B 续体 22B（先读 `0xe820` 再 ack → page6 d15c → `pjmp 0:0x3db`）｜(a-1) 向量 `rom1[0x80]`→B 全 handler；B 内 dispatcher `0x51d9` 区改 page6 全宽扫描
+- [ ] **效果 E 点 patch**（§6.6 R17）：全部 E/读回点 `3e→3f` 1B（含 6 读回；清单见 R17 研究产物）
 - [ ] **B 内数据结构重写**：界表（14× `movi #0x1b→#<n-1>` + `0x45cde → #n`，按 n 印入；§6.5 R12）、`MHI/PHI` 256-bit mask（§6.5 R9）、`acf2`、B 内 page0 表访问（`@r6+disp`）搬迁
 - [ ] **A→B 重定向**（仅 `-voices≠28`）：每入口 4B `13 0E hi lo`（19 点首指令均容 4B；§6.5 R7）+ `0x45cbe` 边界；H1/H2 无 A 侧
 - [ ] B 数据：255 slot 初值由 B pool-init 副本计算落 page6（零初始化+fill；无静态初值表）

@@ -310,7 +310,7 @@ A（已在内存）                B（新，追加于 A 空闲区）
 | `0x04053b` | 同上 (loop D) | **per-channel** reset（a250/a288/a26c/a314/a2c0/a2dc） | `movi r2 #0x001b` | Confirmed |
 | `0x040565` | 同上 (loop E) | **per-channel** reset（a210/a220/a230/a240/a200） | `BPL` 0…N | Confirmed |
 | `0x001ad7` | rom1 mask-acc `0x1ad3` | a4b4/acf2 OR 累积 | `movi r1 #0x001b` | Confirmed |
-| `0x0051d9` | rom1 pool-scan | find-free（`[r1+0xd15c]==0`） | `movi r1 #0x001b` | Confirmed |
+| `0x0051d9` | rom1 pool-scan | **PCM IRQ pending 扫描**（`TST @r1+0xd15c`；**非零**命中→`0x51ef CLR`→`0x25f0` 服务；⚠ 旧"find-free==0"标签作废，见 §6.6 R15） | `movi r1 #0x001b` | Confirmed |
 | `0x0051fc` | rom1 pool-scan | find-free（`[r1+0xd0e0]==0`） | `movi r1 #0x001b` | Confirmed |
 | `0x005886` | rom1 pool-scan | per-voice 表 scan（`0x64d6`） | `movi r1 #0x001b` | Confirmed |
 | `0x0058d7` | rom1 pool-scan | per-voice 表 clear（`0x64d6`） | `movi r1 #0x001b` | Confirmed |
@@ -430,6 +430,27 @@ A（已在内存）                B（新，追加于 A 空闲区）
 - (ii) 成本已量化：闭包 26 例程/8–12KB + 跨页 wrapper + 中断 wrapper + page6 13.3KB + R9 mask。**建议 (ii)/N=255**。
 
 **本轮对既有章节的勘误汇总**：§0/§1（SM 不做 DSP；通道建立立即数循环）、§2.2/§6.1（簿记错位；数组宽度/cfac/cfe4/a3d8=next）、§6.2（r7=SP；tp 需中断 wrapper）、§6.3（B=18→26/41；H1/H2 无 A 侧重定向）、§6.4③⑤（`0x04135c` 非死码；32 宽 movi 地址）、§5（config `c3 fe`）、§9.1（MCU_PatchROM 行号）。
+
+### 6.6 阶段 0 研究：R15-R17（2026-09-11，3 子代理并行）
+
+**R15 PCM 中断通道号（Confirmed；方案已定）**
+- **d15c = "PCM IRQ 待处理标志"数组**（非 find-free；旧标签作废）：全 ROM 仅 6 处字面访问（`0x531` 写 0xff；`0x516c/0x553a/0x41257` CLR；`0x51e0 TST`+`0x51ef CLR`，**非零**命中→`0x25f0` 服务）。
+- **固件不需要完整声部号**：`0x536 MOVE #2 -> r0` 立刻覆盖；channel 唯一用途 = d15c 下标 → 唯一功能故障是 `AND #0x1f` 截断。
+- PCM status 消费者仅 3 处（`0x529` IRQ；`0x41359/0x413b1` 纯 ack）；无人测 bit5；IRQ0 仅接 PCM（GA 走 IRQ1）；IPRA=0x77 → IRQ0 level=7 不嵌套。
+- 协议：GT ext `0xe820`=完整 slot（`PCM_ReadExt`）；`status |= irq_channel & 0x1f`（0-diff）；B handler：**先读 ext 再读 status(ack)** → 写 page6 `d15c[slot]` → `MOVE #2/#1` → `pjmp 0:0x3db`。
+- 落地二选一：(a-2) `0x529` 原地 4B `13 0E hi lo`→B 续体（22B，最小）；(a-1) IRQ0 向量 `rom1[0x80..0x83]`=`00 0E hi lo`→B 全 handler（29B）。
+- 连带：B 的 IRQ dispatcher（`0x51d9` 区）改 page6 全宽扫描（已在闭包）。
+
+**R16 闭包完整性（Confirmed/Strongly：基本闭合，补 d1ac helper 族）**
+- 全 ROM 静态扫描（disp16 **+ 立即数基址** `movi/ADD #0xd435/#0xd1ac`）：**d435/d1ac 无 disp16 引用**，必须按立即数扫。
+- 新增 15 个"已执行但 222 未计"点（`64d6`/`cfac`/`cfe4` 漏项）——全在既有闭包例程内。
+- 69 个"未执行但解码合法"点：~60 在既有例程的**未执行臂**内；**唯一新缺口 = d1ac helper 族 4 入口** `0x43695/0x436a3/0x436c3/0x436d5`（置/清 d1ac bit2/bit1，被 jsr 调用）→ 并入 B。
+- 实现要求：**整例程本体搬运**（含未执行臂），不是只搬 trace 片段。
+
+**R17 效果通道（Confirmed；方案改优：PCM 0x3f 别名，不需 0xe800 扩通道）**
+- 全量 66 写入点（执行 42）+ 3 status 读；分类 V=16 / E=42（含 6 处"借槽 30 读回"）/ C=8 测试。效果编程簇 `0x5ddc-0x64c3` **不在闭包**（不碰 per-voice 数组）。
+- **最小方案**：GT 扩展模式把 **PCM reg 0x3f**（全 ROM 无写、现无分支）定义为效果选择：写 v → `select_channel = EFF_BASE + (v & 3)`；**所有 E 点原地 1 字节 patch `0x3e→0x3f`**（含 6 个读回点），值 0x1c-0x1f 自动映射 0..3；默认模式 0x3f 仍忽略、0x3e 仍 `&0x1f` → 0-diff。
+- 勘误：① 数组需 **`[MAX_VOICE+5]`**（EFF_BASE=256..259 → ≥260 项）；② 效果**读回** 6 点必须与写点同改（R17 原只提写）；③ R13 硬编码补 `pcm.cpp:1044`/`:1520`；④ `0x5e20/0x5ee7` = `move r0/r1 #0x1c` 值源，非写入点。
 
 ---
 
