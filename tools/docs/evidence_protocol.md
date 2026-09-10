@@ -32,16 +32,29 @@ H4 自己位运算错      H5 指令边界错        H6 地址/bank/endian/width
 ```
 按验证成本从低到高排除（先自查 H4/H5/H6，通常最便宜）。
 
-## 3. 位运算必须机械展开（高优先级）
+## 3. 位运算与地址/偏移运算必须机械展开（高优先级）
 
-凡 direction/width/寄存器字段/寻址依赖 bit，**禁止心算**，写出展开式：
+**范围（2026-09-10 加强）**：不仅是 direction/width/寄存器字段等**窄位运算**，还包括**一切地址/偏移/大小运算**——32-bit 地址掩码（`& 0x3ffff`、`>> 16`、`& 0xf`）、page/bank 换算、rom2 位重排、file offset 换算、数组下标/区间边界。教训（2026-09-10 page6 探针轮）：`0x000f0000 & 0x3ffff` 连续三次心算错（0x00000 → 0xC000 → …），而 `memprobe_map.c` 的输出从头就是对的——**心算 32-bit 掩码/重排是本项目已发生的错误源，与窄位运算同级管控**。
 
+**规则**：
+1. 凡结论依赖 bit/掩码/重排，**禁止纯心算**，写出逐步展开（全宽二进制或逐位/逐 nibble 分解），如：
 ```
 raw(次字节)=0x90 = 1001 0000b
 ocode = 0x90>>3 = 0x12 = 18      ore = 0x90&7 = 0
 dir   = ocode&2 = 0x12&2 = 0x02 ≠ 0  → WRITE   （= raw 次字节 bit4）
+
+addr=0x000f0000:  page = (addr>>16) & 0xf = 0x000f & 0xf = 0xf (=15)
+                  off  = addr & 0xffff = 0x0000
+                  address_rom = addr & 0x3ffff（nibble 级）:
+                    0x000F0000: F 在 nibble4（bit16-19 全置位）
+                    0x0003FFFF: = 2^18−1，bit0..17（不含 bit18/19）
+                    AND → bit16+bit17 = 0x30000
+                  addr bit19（0x80000）置位 → |= 0x40000 → 0x70000
+                  => rom2[0x70000]   （工具交叉核对：memprobe_map.c page15 off0 → rom2+0x70000 ✓）
 ```
-结论将影响后续 ≥10 步推理时，机械检查是前置条件。禁止未展开就写 `0x12&2=0` 之类。
+2. **地址重排/位掩码优先用 C 工具算，不用心算**（与 §14 同源）：`memprobe_map.c` 类工具逐条复刻 `MCU_Read/Write` 位重排，输出即权威。心算与工具不一致 → **以工具为准**，回查输入（地址写错？mask 记错？），不反过来怀疑工具。
+3. **重复重算同一表达式 = 错误信号**：同一掩码/重排/换算在会话内重算 ≥2 次且结果摇摆，立即停下心算，改走工具或纸面全宽展开，并回查该值被引用过的所有下游结论（§10）。
+4. 结论将影响后续 ≥10 步推理时，机械检查是前置条件。禁止未展开就写 `0x12&2=0`、`0x000f0000&0x3ffff=0x30000` 之类。
 
 ## 4. 最小验证案例（单条指令）
 
@@ -113,10 +126,11 @@ Previous assumption invalid: <原结论>。Correct GT result: <正确结论>。
 ## 13. 项目已知 H8/SC55 decoder 陷阱（T2 历史 bug 记录，怀疑时对照）
 
 - MOVG 族（op≥0xa0）：方向 = `ocode&2`（次字节 bit4）：ocode 16=读、18=写/XCH（direct+word）；旧 dasm 恒按读式打印（已修）。
-- `ore` 语义随 ocode 变：**非寄存器**的有：1=ADDQ 立即数（0:+1 1:+2 4:−1 5:−2）、2=CLR 子操作码（3=CLR 6=TST 2=EXTU 0=SWAP 5=NOT 4=NEG 1=EXTS）、3=SHLR 移位码、0=MOVG_Immediate 选操作（6/7 写 imm、4/5 减 imm）；其余 ocode 的 `ore` 才是寄存器。
-- MOVG_Immediate：源 indirect/absolute 且 ore∈{4,5,6,7} → 码流再读 1/2 字节尾 imm（4/6→1B、5/7→2B）。
+- `ore` 语义随 ocode 变：**非寄存器**的有：1=ADDQ 立即数（0:+1 1:+2 4:−1 5:−2）、2=CLR 子操作码（3=CLR 6=TST 2=EXTU 0=SWAP 5=NOT 4=NEG 1=EXTS）、3=SHLR 移位码、0=MOVG_Immediate 选操作（6/7 写 imm、4/5 减 imm）；**9/11=BSET_ORC/BCLR_ANDC 仅在操作数为立即数时成立，否则是 BSET/BCLR（bit=r[ore]&0xf）**；**24-31=`ore|((ocode&1)<<3)` 为位号（非寄存器）**；其余 ocode 的 `ore` 才是寄存器。
+- MOVG_Immediate：源 indirect/absolute 且 ore∈{4,5,6,7} → 码流再读 1/2 字节尾 imm（4/6→1 字节、5/7→2 字节）。
 - 计数分支 `01/06/07` = **3 字节**（opcode2 + int8 disp：`r[reg]--`，未下溢则 `pc+=disp`，06 需 Z、07 需 !Z）。
-- `0x11` 寄存器间接族：`ret` / `ret via rN:rN+1` / `jmp rN` / `jsr rN`。
+- `0x11` 寄存器间接族：`ret`（pop cp,pc）/ `jsr via rN:rN+1`（push pc/cp 后经寄存器对跳转，**call 语义**）/ `jmp rN` / `jsr rN`。
+- MOVF `0x80-0x8f`=读、`0x90-0x9f`=写；MULXU/DIVXU 字模式目的为寄存器对 `r{ore&~1}:r{ore&~1|1}`；STC 方向=`控制寄存器 -> 操作数`。
 - `tools/verify`（Phase A 833,332 + Phase B 44,213 条 0 失败）是当前最强交叉验证，但它本身是 **T2**——不替代上面的 ROM+src 验证，也不能反过来为某条解码背书。
 
 ## 14. 工具实现语言：优先 C，不用 Python
@@ -128,4 +142,4 @@ GT（`src/`）与 VM（`tools/vm/`）均为 C/C++ 工程。**本项目自制工�
 
 - 结论性 / 可复用验证工具**必须 C**；一次性快照字节统计可用脚本起步，但**结论须由 C 工具或 GT/VM 本身复核**后才定。
 - 教训：提内存扩展（如 page6）前，必须先用 C 的真实内存模型（`MCU_Read/Write` 的页映射、`(page<<16)+offset` 寻址、`address_rom` 位重排）把地址怎么编、会不会重叠、基址寄存器怎么改想清楚——**既不武断说"不可"（page6 其实可 backing），也不武断说"能用"（没想清解码就拍板）**。C 工具用真实模型，天然防止这两种拍脑袋。
-- 既有 Python 工具（`tools/verify/verify_dasm.py`、`semantics.py`、`tools/analyze_sram.py`）为历史遗留（T2 级）；按本规则**新工具一律 C**，`verify` 后续再改时向 C 迁移。
+- **verify 已迁移 C（2026-09-11）**：`tools/verify/verify_dasm.c`（Phase A+B 一体，替代原 `verify_dasm.py`+`semantics.py`，.py 已删）。相对 Python 版增强：① 向量入口补充解码（`pc_vec.txt`→`mach_vec.txt`，解决"handler 首指令地址永不作为 trace 行 PC"导致的派发漏识别）；② 补全 ocodes 9/11（ORC/ANDC vs BSET/BCLR）与 24-31（BSET/BCLR/BNOTI/BTSTI）语义（Python 版跳过）。

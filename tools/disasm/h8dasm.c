@@ -78,12 +78,13 @@ static void decode(int page, int off, dec_t *d) {
         }
         ADV(1); d->kind = 5; fmt(d, "??0x%02x (trap)", b); FINISH;
     }
-    // 0x11 = 2字节寄存器间接: 0x19 ret(pop cp,pc); 0x18/9 系列 ret via r对;
+    // 0x11 = 2字节寄存器间接: 0x19 ret(pop cp,pc); opcode_h==0x19(0xc8-0xcf)
+    // = push pc/cp 后经 rN:rN+1 跳转（GT MCU_Jump_JMP:350，call 语义，非 ret）;
     // 0x1a jmp r; 0x1b jsr r; 其余 trap。
     if (op == 0x11) {
         ADV(1); int b = B1, op_h = b >> 3, reg = b & 7;
         if (b == 0x19) { d->kind = 4; fmt(d, "ret (pop cp,pc)"); }
-        else if (op_h == 0x19) { d->kind = 4; fmt(d, "ret via r%d:r%d", reg & ~1, reg+1); }
+        else if (op_h == 0x19) { d->kind = 5; d->is_call = 1; fmt(d, "jsr via r%d:r%d", reg & ~1, (reg & ~1)+1); }
         else if (op_h == 0x1a) { d->kind = 5; fmt(d, "jmp r%d", reg); }
         else if (op_h == 0x1b) { d->kind = 5; d->is_call = 1; fmt(d, "jsr r%d", reg); }
         else { d->kind = 5; fmt(d, "??0x%02x (trap)", b); }
@@ -111,7 +112,10 @@ static void decode(int page, int off, dec_t *d) {
     if (op >= 0x58 && op <= 0x5f) { ADV(2); fmt(d,"movi r%d #0x%04x",op&7,W2); FINISH; }
     if (op >= 0x60 && op <= 0x6f) { ADV(1); fmt(d,"movl%s r%d @(br,$%02x)",(op&8)?"w":"",op&7,B1); FINISH; }
     if (op >= 0x70 && op <= 0x7f) { ADV(1); fmt(d,"movs%s r%d @(br,$%02x)",(op&8)?"w":"",op&7,B1); FINISH; }
-    if (op >= 0x80 && op <= 0x9f) { ADV(1); fmt(d,"movf%s r%d @r6+%d",(op&8)?"w":"",op&7,S1); FINISH; }
+    if (op >= 0x80 && op <= 0x9f) { ADV(1); // 0x80-8f 读 / 0x90-9f 写 (GT Short_MOVF:713)
+        if (op & 0x10) fmt(d,"movf%s r%d -> @r6+%d",(op&8)?"w":"",op&7,S1);
+        else           fmt(d,"movf%s r%d @r6+%d",(op&8)?"w":"",op&7,S1);
+        FINISH; }
 
     if ((op==0x04||op==0x05||op==0x0c||op==0x0d||op==0x15||op==0x1d) || op >= 0xa0) {
         int top=op&0xf0, reg=op&7, siz=op&8;
@@ -179,13 +183,41 @@ static void decode(int page, int off, dec_t *d) {
             else        fmt(d,"SHLR ??%d (trap)", ore);
             FINISH;
         }
+        if (ocode == 9 || ocode == 11) {
+            // GT MCU_Opcode_BSET_ORC (mcu_opcodes.cpp:875) / BCLR_ANDC (:899):
+            // 仅 GENERAL_IMMEDIATE 操作数走 ORC/ANDC（控制寄存器）；否则走
+            // BSET/BCLR 分支（bit = r[ore]&0xf，写回操作数）。
+            int isimm = (top==0x00 && reg==4);
+            const char *m = isimm ? (ocode==9 ? "BSET_ORC" : "BCLR_ANDC")
+                                  : (ocode==9 ? "BSET" : "BCLR");
+            fmt(d,"%s %s r%d%s", m, srcs, ore, ext?" x":"");
+            FINISH;
+        }
+        if (ocode >= 24) {
+            // GT BSET/BCLR/BNOTI/BTSTI (mcu_opcodes.cpp:1009-1125):
+            // 位号 = ore | ((ocode&1)<<3)，非寄存器。
+            static const char *bn[] = {"BSET","BSET","BCLR","BCLR","BNOTI","BNOTI","BTSTI","BTSTI"};
+            fmt(d,"%s %s #%d%s", bn[ocode-24], srcs, ore | ((ocode&1)<<3), ext?" x":"");
+            FINISH;
+        }
         if (ocode == 18) {  // MOVG3 (mcu_opcodes.cpp:1041, d=1): 写 / XCH（非读）
             if (top==0xa0 && siz)      fmt(d,"XCH r%d r%d%s", ore, reg, ext?" x":"");
             else if (top==0xa0)        fmt(d,"MOVG3 ?? (trap: direct byte)");
             else                       fmt(d,"MOVG3 r%d -> %s%s", ore, srcs, ext?" x":"");
             FINISH;
         }
-        // 其余（MOVG2 读式 16、算术 4/5/6/7/8/10/12/14、扩展 20-23 等）: r<ore> 为寄存器，正确
+        if (ocode == 19) {  // STC (mcu_opcodes.cpp:1003): 控制寄存器 -> 操作数
+            if (top==0x00 && reg==4) fmt(d,"STC ?? (trap: imm)");
+            else fmt(d,"STC r%d -> %s%s", ore, srcs, ext?" x":"");
+            FINISH;
+        }
+        if (siz && (ocode == 21 || ocode == 23)) {
+            // GT MULXU/DIVXU 字模式 (mcu_opcodes.cpp:1325/1354): 目的/源为
+            // 寄存器对 r{ore&~1}:r{ore&~1|1}。
+            fmt(d,"%s %s r%d:r%d%s",OPC_NAME[ocode&31],srcs,ore&~1,(ore&~1)|1,ext?" x":"");
+            FINISH;
+        }
+        // 其余（MOVG2 读式 16、算术 4/5/6/7/8/10/12/14、扩展 20/22 等）: r<ore> 为寄存器，正确
         fmt(d,"%s %s r%d%s%s",OPC_NAME[ocode&31],srcs,ore,ext?" x":"",imms);
         FINISH;
     }

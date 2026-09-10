@@ -21,7 +21,7 @@ static const char *TMPL[256] = {
 "php","ora #{imm}","asl a","seb 0,a",".byte {opc}","ora {abs}","asl {abs}","seb 0,{zp}",
 "bpl {rel}","ora [{zp}],y","clt","bbc 0,a,{rel}",".byte {opc}","ora {zp},x","asl {zp},x","bbc 0,{zp},{rel}",
 "clc","ora {abs},y","dec a","clb 0,a",".byte {opc}","ora {abs},x","asl {abs},x","clb 0,{zp}",
-"jsr {abs}","and [{zp},x]","jsr \\{sp}","bbs 1,a,{rel}","bit {zp}","and {zp}","rol {zp}","bbs 1,{zp},{rel}",
+"jsr {abs}","and [{zp},x]","jsr {sp}","bbs 1,a,{rel}","bit {zp}","and {zp}","rol {zp}","bbs 1,{zp},{rel}",
 "plp","and #{imm}","rol a","seb 1,a","bit {abs}","and {abs}","rol {abs}","seb 1,{zp}",
 "bmi {rel}","and [{zp}],y","set","bbc 1,a,{rel}",".byte {opc}","and {zp},x","rol {zp},x","bbc 1,{zp},{rel}",
 "sec","and {abs},y","inc a","clb 1,a","ldm #{imm},{zp}","and {abs},x","rol {abs},x","clb 1,{zp}",
