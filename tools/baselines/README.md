@@ -114,3 +114,50 @@ in place); drop the `.txt` files here to make the verification step runnable.
 - `trace_boot3m_base.txt` — stock GT trace `[0, 3M)` (boot + first idle).
 - `probe_snap_page0.bin` / `probe_snap_page6.bin` — probe snapshots used to
   verify page-6 backing (unbacked vs `b_ram`) with `probe/memprobe_*`.
+
+## m4_audio — frozen stock audio baseline (G6, 2026-09-11)
+
+Frozen stock (default 28-voice interpreter) capture of the `[300M, 320M)`
+window, used by `mk2cpp/tests/m4_audio_null.ps1 -CheckBaseline` so the n=28
+audio null has a frozen reference and not only a same-version two-mode compare
+(`mk2cpp/docs/10_m4_oracle.md` §1.8/§2/§5.1 G6).
+
+| File | Content |
+|---|---|
+| `stock_300M_320M.wav` | producer-side int16 stereo tap (`-wav:` + `-audiowin`), PCM=1/2ch/16bit/66207Hz, 220,688 B payload (55,172 pairs) |
+| `stock_300M_320M.wav.meta` | `wavdump v1`: window/first/last cycle, rate, pairs, data bytes, `payload_fnv1a` |
+| `stock_300M_320M.audiohash` | `audiohash v1`: FNV-1a64 over the whole PostSample stream at 320M (`audio_fnv1a = 94c100f3eec68e9f`) |
+| `stock_300M_320M.state.hash` | `hashdump v1` at 320M (`pcm.config_reg_3d=0x7b`, stock scalars) |
+| `SHA256SUMS.txt` | SHA-256 of the four files above; the freeze definition |
+
+Provenance (stock semantics; `-mk2` = fixed ROM set, no `-voices`, gain
+default, from reset; run from the repo root):
+
+```
+build\nuked-sc55.exe -mk2 -demo \
+    -wav:tools\baselines\m4_audio\stock_300M_320M.wav \
+    -audiowin 300000000 320000000 \
+    -audiohash 320000000 tools\baselines\m4_audio\stock_300M_320M.audiohash \
+    -hashdump 320000000 tools\baselines\m4_audio\stock_300M_320M.state.hash
+```
+
+Verify (PowerShell):
+```powershell
+# integrity: recompute the four SHA-256 values and diff against the manifest
+Get-Content tools\baselines\m4_audio\SHA256SUMS.txt
+Get-FileHash tools\baselines\m4_audio\stock_300M_320M.* -Algorithm SHA256
+# end-to-end: the oracle re-verifies the manifest and compares this run's stock
+# payload/audiohash against the frozen files (missing baseline = SKIP)
+powershell -ExecutionPolicy Bypass -File mk2cpp\tests\m4_audio_null.ps1 -CheckBaseline
+```
+
+The manifest check can also be done independently (`certutil -hashfile`);
+`payload_fnv1a` in the `.meta` is recomputable from the WAV `data` chunk.
+
+Refreeze (local, user present) when any of these change: the stock PCM/DSP or
+`MCU_PostSample` path; the ROM set/`-mk2` mapping; the `-wav:`/`-audiowin`/
+`-audiohash` tap semantics; the demo key sequence or default `-gain`. Generate
+the four files with the command above, re-run the oracle once to confirm the
+new values, then rewrite `SHA256SUMS.txt`. Like the rest of this directory the
+capture is **gitignored and never committed** (`tools/baselines/*` rule),
+tracked only by this note; keep the files local.

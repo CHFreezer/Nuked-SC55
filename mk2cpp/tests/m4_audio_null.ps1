@@ -33,6 +33,13 @@
         -mk2cpp -voices:28 -mk2cpp-hand:0
     and compares it against the hand-on run (W3 §5.3 gate 5).
 
+    With -CheckBaseline it additionally gates on the frozen stock capture in
+    tools\baselines\m4_audio (G6, 10_m4_oracle.md §5.1): first SHA256SUMS.txt is
+    re-verified (mismatch/missing listed file = FAIL), then the stock run's WAV
+    payload SHA256 and -audiohash are compared against the frozen files
+    (differences = FAIL). A missing baseline directory/manifest/files = SKIP,
+    never FAIL. Off by default: without it dry-run and -Execute are unchanged.
+
 .NOTES
     Pure PowerShell 5.1, no Python, no SDL dependency. Outputs go to -OutDir
     (default is under the gitignored mk2cpp/out/). The user must be present
@@ -58,6 +65,15 @@ param(
 
     # Optional -gain:<x db> / -gain:<x>; empty = GT default (1.0).
     [string]$Gain = '',
+
+    # Optional G6 gate: verify the frozen stock baseline and require the stock
+    # run's WAV payload/audiohash to match it. Off by default.
+    [switch]$CheckBaseline,
+
+    # Frozen baseline directory and file stem; relative paths resolve against
+    # the repo root. Custom windows need a matching frozen <stem>.
+    [string]$BaselineDir = 'tools\baselines\m4_audio',
+    [string]$BaselineName = 'stock_300M_320M',
 
     # Add the -mk2cpp-hand:0 A/B run (W3 gate 5).
     [switch]$HandOff,
@@ -187,6 +203,17 @@ $handoffState = Join-Path $OutDir 'handoff.state.hash'
 $summaryPath = Join-Path $OutDir 'summary.txt'
 $planPath    = Join-Path $OutDir 'plan.txt'
 
+# ---- frozen baseline paths (only read with -CheckBaseline) ----------------
+if (-not [System.IO.Path]::IsPathRooted($BaselineDir)) {
+    $BaselineDir = Join-Path $script:RepoRoot $BaselineDir
+}
+$BaselineDir = [System.IO.Path]::GetFullPath($BaselineDir)
+$script:BaselineDir  = $BaselineDir
+$script:BaselineName = $BaselineName
+$script:BaselineWav  = Join-Path $BaselineDir ($BaselineName + '.wav')
+$script:BaselineHash = Join-Path $BaselineDir ($BaselineName + '.audiohash')
+$script:BaselineSums = Join-Path $BaselineDir 'SHA256SUMS.txt'
+
 $caps = Get-GtCapabilities
 $missing = @(Get-RequiredCapabilities -Caps $caps)
 
@@ -243,6 +270,46 @@ if ($HandOff) {
     $handoffArgs = Get-ModeArgs -Mode 'm4handoff' -WavPath $handoffWav -HashPath $handoffHash -StatePath $handoffState
 }
 
+# ---- frozen stock baseline (G6) -------------------------------------------
+# Integrity is defined by <BaselineDir>\SHA256SUMS.txt. A missing directory or
+# manifest is SKIP; a hash mismatch or a missing listed file is FAIL.
+function Get-BaselineStatus {
+    if (-not (Test-Path -LiteralPath $script:BaselineDir)) {
+        return [pscustomobject]@{ Result = 'SKIP'; Detail = ('baseline dir missing: ' + $script:BaselineDir) }
+    }
+    if (-not (Test-Path -LiteralPath $script:BaselineSums)) {
+        return [pscustomobject]@{ Result = 'SKIP'; Detail = ('SHA256SUMS.txt missing: ' + $script:BaselineSums) }
+    }
+    $bad = New-Object System.Collections.Generic.List[string]
+    $count = 0
+    foreach ($line in Get-Content -LiteralPath $script:BaselineSums) {
+        if ($line -notmatch '^\s*([0-9a-fA-F]{64})\s+(.+?)\s*$') { continue }
+        $count++
+        $expected = $Matches[1].ToLower()
+        $name = $Matches[2]
+        $path = Join-Path $script:BaselineDir $name
+        if (-not (Test-Path -LiteralPath $path)) {
+            [void]$bad.Add($name + ': missing')
+            continue
+        }
+        $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLower()
+        if ($actual -ne $expected) { [void]$bad.Add($name + ': sha256 mismatch') }
+    }
+    if ($count -eq 0) {
+        return [pscustomobject]@{ Result = 'SKIP'; Detail = 'SHA256SUMS.txt has no parsable entries' }
+    }
+    if ($bad.Count -gt 0) {
+        return [pscustomobject]@{ Result = 'FAIL'; Detail = ('SHA256SUMS mismatch: ' + ($bad -join '; ')) }
+    }
+    return [pscustomobject]@{ Result = 'PASS'; Detail = ('SHA256SUMS verified (' + $count + ' files)') }
+}
+
+function Get-ShortHash {
+    param([string]$Hash)
+    if ([string]::IsNullOrEmpty($Hash)) { return '?' }
+    return $Hash.Substring(0, [Math]::Min(16, $Hash.Length))
+}
+
 # ---- dry-run (default) ----------------------------------------------------
 function Write-Plan {
     $lines = New-Object System.Collections.Generic.List[string]
@@ -253,6 +320,11 @@ function Write-Plan {
     [void]$lines.Add(("timeout      : {0}s  (ceil(End/24e6*2)+15)" -f $TimeoutSec))
     [void]$lines.Add(("outdir       : {0}" -f $OutDir))
     [void]$lines.Add(("pcmdiff      : {0}" -f $(if (Test-Path -LiteralPath $script:Pcmdiff) { 'present' } else { 'not built (SHA256 fallback)' })))
+    if ($CheckBaseline) {
+        $bl = Get-BaselineStatus
+        [void]$lines.Add(("baseline     : {0} [{1}]" -f $script:BaselineDir, $script:BaselineName))
+        [void]$lines.Add(("baseline chk : {0} - {1}" -f $bl.Result, $bl.Detail))
+    }
     [void]$lines.Add("")
     [void]$lines.Add("stock  : " + (Format-Cmd -ArgList $stockArgs))
     [void]$lines.Add("m4     : " + (Format-Cmd -ArgList $m4Args))
@@ -267,6 +339,11 @@ function Write-Plan {
     [void]$lines.Add("  4. layout-independent state scalars equal (mcu.pc/sr/cycles, pcm cfg 3c/3d)")
     [void]$lines.Add("  5. stdout LCDEN 0 <= 2 (boot + demo power-cycle)")
     [void]$lines.Add("  6. CPU duty report (process CPU / wall; INFO only)")
+    if ($CheckBaseline) {
+        [void]$lines.Add("  B0. frozen baseline integrity via SHA256SUMS.txt (mismatch = FAIL, missing = SKIP)")
+        [void]$lines.Add("  B1. stock WAV payload SHA256 == frozen WAV payload (bit-exact)")
+        [void]$lines.Add("  B2. stock -audiohash == frozen audio_fnv1a")
+    }
     if ($HandOff) {
         [void]$lines.Add("  7. W3 gate 5: handoff vs hand-on audiohash + WAV payload byte-identical")
     }
@@ -287,7 +364,7 @@ function Write-MissingOptions {
         Write-Host ("  ERROR: missing GT option " + $m)
     }
     Write-Host "       implementer (Wave 0a/0b): land the frozen options listed in"
-    Write-Host "       mk2cpp/out/m4/10_m4_oracle.md §2.2/§5.1 (G1/G5) and advertise them in -h;"
+    Write-Host "       mk2cpp/docs/10_m4_oracle.md §2.2/§5.1 (G1/G5) and advertise them in -h;"
     Write-Host "       -audiowin must backfill the RIFF/data sizes and fclose the WAV,"
     Write-Host "       then write <file>.meta last as the completion marker."
     Write-Host "       Dry-run continues; -Execute will refuse until these options exist."
@@ -608,6 +685,51 @@ elseif ($metaStock['payload_fnv1a'] -and $metaM4['payload_fnv1a']) {
 
 $cmp = Compare-WavDumps -RefPath $stockWav -DutPath $m4Wav -ReportPath (Join-Path $OutDir 'audio_diff.md')
 Add-Check -Check 'audio:null' -Result $cmp.Result -Detail $cmp.Detail
+
+# 2b) frozen stock baseline (G6; only with -CheckBaseline)
+if ($CheckBaseline) {
+    $bs = Get-BaselineStatus
+    if ($bs.Result -eq 'SKIP') {
+        Add-Check -Check 'baseline:integrity' -Result 'SKIP' -Detail $bs.Detail
+        Add-Check -Check 'baseline:wav' -Result 'SKIP' -Detail 'frozen baseline absent; nothing to compare'
+        Add-Check -Check 'baseline:audiohash' -Result 'SKIP' -Detail 'frozen baseline absent; nothing to compare'
+    }
+    else {
+        Add-Check -Check 'baseline:integrity' -Result $bs.Result -Detail $bs.Detail
+
+        $baseInfo  = Get-WavDataInfo -Path $script:BaselineWav
+        if ($null -eq $baseInfo) {
+            Add-Check -Check 'baseline:wav' -Result 'SKIP' -Detail ('frozen WAV missing/unparsable: ' + $script:BaselineWav)
+        }
+        else {
+            $baseHash  = Get-WavPayloadHash -Info $baseInfo
+            $stockInfo = Get-WavDataInfo -Path $runStock.WavPath
+            $stockHash = Get-WavPayloadHash -Info $stockInfo
+            if ($baseHash -and $baseHash -eq $stockHash) {
+                Add-Check -Check 'baseline:wav' -Result 'PASS' -Detail ('payload bit-exact sha256=' + (Get-ShortHash -Hash $baseHash))
+            }
+            else {
+                Add-Check -Check 'baseline:wav' -Result 'FAIL' `
+                    -Detail ('payload differs (frozen=' + (Get-ShortHash -Hash $baseHash) + ' stock=' + (Get-ShortHash -Hash $stockHash) + ')')
+            }
+        }
+
+        $baseAh = Read-AudioHash -Path $script:BaselineHash
+        if (-not $baseAh) {
+            Add-Check -Check 'baseline:audiohash' -Result 'SKIP' -Detail ('frozen audiohash missing/unparsable: ' + $script:BaselineHash)
+        }
+        else {
+            $stockAh = Read-AudioHash -Path $runStock.HashPath
+            if ($baseAh -eq $stockAh) {
+                Add-Check -Check 'baseline:audiohash' -Result 'PASS' -Detail ('fnv1a=' + (Get-ShortHash -Hash $baseAh))
+            }
+            else {
+                Add-Check -Check 'baseline:audiohash' -Result 'FAIL' `
+                    -Detail ('frozen=' + (Get-ShortHash -Hash $baseAh) + ' stock=' + (Get-ShortHash -Hash $stockAh))
+            }
+        }
+    }
+}
 
 # 3) layout-independent state scalars (W3 gate 3 helper; D4: native data
 # structures may differ, so only layout-free scalars are compared)

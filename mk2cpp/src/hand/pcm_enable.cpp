@@ -133,6 +133,7 @@ void MK2CPP_HandFillTables(void)
     /* M4 slice-2 voice pool (native_pool.cpp); inert until Wave 2b registers
      * the pool-init L0 PCs there. */
     MK2CPP_PoolFillTables();
+    void MK2CPP_VoiceMaterializeFillTables(void); MK2CPP_VoiceMaterializeFillTables(); /* voice_materialize.cpp (S1/S2) */
 }
 
 void MK2CPP_HandPostReset(void)

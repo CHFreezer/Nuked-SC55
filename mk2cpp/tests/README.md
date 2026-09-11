@@ -18,7 +18,7 @@ completed trace window and then force-kills the process. It is pure PowerShell
 
 | Script | Purpose | Real GT run? |
 |---|---|---|
-| `m4_audio_null.ps1` | n=28 audio null: stock vs `-mk2cpp`（`-voices:28` 已回滚为 no-op，等价默认 28；`[300M,320M)` WAV payload / `-audiohash` / state scalars）；可选 `-HandOff` 同二进制 A/B | only with `-Execute -UserPresent` |
+| `m4_audio_null.ps1` | n=28 audio null: stock vs `-mk2cpp`（`-voices:28` 已回滚为 no-op，等价默认 28；`[300M,320M)` WAV payload / `-audiohash` / state scalars）；可选 `-HandOff` 同二进制 A/B、`-CheckBaseline` 冻结基准门禁（G6） | only with `-Execute -UserPresent` |
 | `m4_stress_voices.ps1` | ~~n=32/64/128/255 矩阵（255 = 妥协上限，目标 256）~~ **暂缓**（`-voices:` 已回滚）；原 S1-S7 解析与 O1-O10 映射（`cfg3d=0x7b` + `pcm.ext_voices=n`）随 256 扩展暂缓 | 暂缓 |
 | `two_mode_check.ps1` | M1-M3 default-path regression (trace/hash, `SDL_*_DRIVER=dummy`) | headless by design, unchanged |
 
@@ -49,6 +49,9 @@ powershell -ExecutionPolicy Bypass -File mk2cpp\tests\m4_audio_null.ps1 -Require
 # real run (user present, LCD + audio)
 powershell -ExecutionPolicy Bypass -File mk2cpp\tests\m4_audio_null.ps1 -Execute -UserPresent
 
+# frozen stock 300M-320M baseline gate (G6; local fixture, missing baseline = SKIP)
+powershell -ExecutionPolicy Bypass -File mk2cpp\tests\m4_audio_null.ps1 -CheckBaseline -Execute -UserPresent
+
 # MIDI-driven variant and W3 gate-5 A/B (needs a corpus schedule)
 powershell -ExecutionPolicy Bypass -File mk2cpp\tests\m4_audio_null.ps1 -Scenario midi `
     -MidiSchedule mk2cpp\out\m4\corpus\poly28.sched -HandOff -Execute -UserPresent
@@ -63,6 +66,9 @@ powershell -ExecutionPolicy Bypass -File mk2cpp\tests\m4_audio_null.ps1 -Scenari
 | `-OutDir` | `mk2cpp\out\m4\audio_null` | outputs (gitignored) |
 | `-MidiSchedule` | empty | required for `-Scenario midi` |
 | `-Gain` | empty | optional `-gain:<x|db>`; must match across runs |
+| `-CheckBaseline` | off | G6 gate: verify `tools\baselines\m4_audio\SHA256SUMS.txt` (mismatch/missing listed file = FAIL) and require the stock WAV payload/`-audiohash` to match the frozen capture; missing baseline dir/manifest = SKIP |
+| `-BaselineDir` | `tools\baselines\m4_audio` | frozen baseline directory (relative paths resolve against the repo root) |
+| `-BaselineName` | `stock_300M_320M` | frozen file stem inside `-BaselineDir`; must match the frozen `-AudioStart/-AudioEnd` window |
 | `-HandOff` | off | adds `-mk2cpp-hand:0` A/B run (W3 gate 5) |
 | `-RequireReady` | off | dry-run exits `2` when required GT options are missing |
 | `-Execute` / `-UserPresent` | off | the only way to launch GT; both are required |
@@ -70,7 +76,12 @@ powershell -ExecutionPolicy Bypass -File mk2cpp\tests\m4_audio_null.ps1 -Scenari
 Checks: `-audiohash` equality, WAV payload SHA256 (`pcmdiff --tolerance 0`
 report when built), finalized WAV header, `.meta` window/rate/length equality,
 layout-independent state scalars (`mcu.pc/sr/cycles`, `pcm.config_reg_3c/3d`),
-`LCDEN 0 <= 2`, CPU duty report (INFO), and the hand on/off A/B.
+`LCDEN 0 <= 2`, CPU duty report (INFO), and the hand on/off A/B. With
+`-CheckBaseline` it adds the G6 checks: `baseline:integrity` (SHA256SUMS.txt
+re-verification; mismatch/missing listed file = FAIL), `baseline:wav` (stock
+payload == frozen payload) and `baseline:audiohash` (stock `audio_fnv1a` ==
+frozen). A missing baseline directory, manifest or file is reported as `SKIP`
+with the reason; the dry-run prints the baseline status but keeps exit `0`.
 
 ### m4_stress_voices.ps1
 
@@ -266,9 +277,11 @@ asks for `-voices:256` until that design change (D1) is approved.
   `cfg3d=0x7b` and report `pcm.ext_voices=n` via `-snapinfo` (`-hashdump` stays
   v1, unchanged for M1-M3 baseline compatibility). The scalar is parsed from
   `-snapinfo`; when absent, S4/O4 parse as SKIP (never PASS).
-- The stock 300M-320M audio baseline freeze (G6) is still pending: it needs a
-  user-present stock run with `-wav:`/`-audiowin`/`-audiohash`, otherwise every
-  M4 audio null is only "same-version two-mode", not a frozen reference.
+- The stock 300M-320M audio baseline freeze (G6) is **done**: the frozen dump
+  lives in `tools\baselines\m4_audio\` (local fixture, gitignored, SHA256SUMS.txt
+  verified; see `tools\baselines\README.md`). `m4_audio_null.ps1 -CheckBaseline`
+  turns the n=28 null into a frozen-reference comparison. Refreeze (user
+  present) when the stock PCM/ROM path or the audio tap changes.
 - The `mk2cpp/README.md` tools directory table was not updated (write scope of
   this wave was limited to `mk2cpp/tests/**` and `mk2cpp/tools/**`); add the
   pcmdiff/midisched rows there separately.

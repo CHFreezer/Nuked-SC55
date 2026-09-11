@@ -166,14 +166,17 @@ sm/sm_ram/sm_shared_ram/.../uart_buffer/uart_rx_byte` + `hash.lcd_state`。
   `snap: dumped full state at c...`（`:1530`）。
 - ⇒ O2/O3/O10 的机读采集当前不可用，属必须先补的验收工具缺口（§5.1 G3）。
 
-### 1.8 baseline fixture（状态已有、音频没有）
+### 1.8 baseline fixture（状态与音频均已冻结）
 
 - `tools/baselines/trace_boot3m_base.txt`、`trace_200m_base.txt`：O9/默认回归的冻结
   trace（本地 fixture，缺失时 `two_mode_check.ps1` 记 SKIP）。
-- `tools/baselines/README.md:112-115` 明确这两个是 stock GT 的 0-diff oracle。
-- **音频没有 baseline**；M4 动工前应在 stock 仍可信时冻结一份 300M 音频 dump
-  （见 §5.1 G6；**待办，需用户在场**），否则将来只能「同版本两模式」对照，
-  无法防「两个模式一起错」。
+- `tools/baselines/README.md:110-116` 明确这两个是 stock GT 的 0-diff oracle。
+- **音频 baseline 已冻结（G6，2026-09-11）**：`tools/baselines/m4_audio/`
+  `stock_300M_320M.wav / .wav.meta / .audiohash / .state.hash` +
+  `SHA256SUMS.txt`（本地 fixture，`tools/baselines/*` 已 gitignore，不入 git；
+  以 SHA256SUMS 冻结完整性）。`m4_audio_null.ps1 -CheckBaseline` 会把本次 stock
+  跑出的 WAV payload/`-audiohash` 与它对照，防止「两个模式一起错」；
+  stock PCM/ROM 路径或音频 tap 变更后需重冻并更新 SHA256SUMS。
 
 ---
 
@@ -390,15 +393,15 @@ summary.txt / plan.txt           检查表 + dry-run 命令留档
    明确不同）；
 4. `finally` 里无条件 kill；超时按 24MHz×2 计算，不用固定长等待。
 
-### 4.2 脚本草稿（本地 `out/m4/oracle/`，不入 git）
+### 4.2 脚本（已从本地草稿落地到 `mk2cpp/tests/`）
 
 | 脚本 | 用途 | 关键参数 | 现状 |
 |---|---|---|---|
-| `m4_audio_null.ps1` | §2 n=28 stock vs `-mk2cpp -voices:28` 音频 null；`-HandOff` 可选加第三跑（09 gate 5） | `-Scenario demo\|midi`、`-AudioStart/End`（默认 300M/320M）、`-MidiSchedule`、`-Gain`、`-HandOff`、`-TimeoutSec`（0=自动）、`-Execute`、`-UserPresent` | 草稿：dry-run 打印命令/超时/比较计划；真实运行骨架含轮询+kill+SHA256/pcmdiff 比较 |
+| `m4_audio_null.ps1` | §2 n=28 stock vs `-mk2cpp -voices:28` 音频 null；`-HandOff` 可选加第三跑（09 gate 5）；`-CheckBaseline` 加 G6 冻结基准门禁（`-BaselineDir` 默认 `tools\baselines\m4_audio`） | `-Scenario demo\|midi`、`-AudioStart/End`（默认 300M/320M）、`-MidiSchedule`、`-Gain`、`-HandOff`、`-CheckBaseline`/`-BaselineDir`/`-BaselineName`、`-TimeoutSec`（0=自动）、`-Execute`、`-UserPresent` | 已落地：dry-run 打印命令/超时/比较计划（含基准状态）；真实运行骨架含轮询+kill+SHA256/pcmdiff 比较；`-CheckBaseline` 先验 SHA256SUMS 再比 stock payload/audiohash |
 | `m4_stress_voices.ps1` | §3 压力矩阵与 S1–S7 / O1–O10 判据 | `-VoiceLevels @(32,64,128,255)`、`-Scenario midi\|demo`、`-RunTo 400M`、`-AudioStart/End`、`-HashAt`、`-TraceFrom/To`、`-Execute`、`-UserPresent` | 草稿：dry-run 打印每级命令与预期检查；真实运行骨架含 pcmtrace/hashdump/trace 解析与汇总表 |
 
-脚本路径解析：`$PSScriptRoot` = `mk2cpp/out/m4/oracle` → repo 根 =
-`..\..\..\..`；GT exe 固定 `build\nuked-sc55.exe`，工作目录 `build`（ROM BasePath）。
+脚本路径解析：`$PSScriptRoot` = `mk2cpp/tests` → repo 根 = `..\..`；GT exe 固定
+`build\nuked-sc55.exe`，工作目录 `build`（ROM BasePath）。
 `pcm_trace.log`/`demo_snap.bin` 是 CWD 固定名（`mcu.cpp:940,1526`），多次运行需跑完
 即改名搬运，脚本已按 per-run 子目录处理。
 
@@ -415,7 +418,7 @@ summary.txt / plan.txt           检查表 + dry-run 命令留档
 | **G3 `-snapinfo` + `isr4fe`**（P1） | 在取指后统计 `mcu.pc==0x04FE` 的 fetch 计数（对应文档 `g_isr4fe`）；无参选项，每处 `-hashdump` 点与进程退出时向 stdout 写一行 `SNAP ... cycles/pc/cp/sr/sleep/iml/pend/cfg3c/cfg3d/select_channel/voice_mask_popcount/irq_channel/ext_voices`（`ext_voices` = 方案 A 的 S4/O4 判据，out/m4/12 §4.3；该标量只在此 snapinfo 输出提供，状态 dump 文本保持 v1 不变） | 计数器位置要与文档口径一致（04FE epilogue）；M4 接管后 04FE 可能不再执行 → **同时给出「事件计数」替代口径或明示只对解释器路径有效** |
 | **G4 多 `-hashdump` 点**（P2） | `-hashdump` 改数组（≤8 个），各自一次性写；默认单点行为不变 | 用于长跑漂移/多点 isr 观察；不阻塞 P1 |
 | **G5 `-midiseq <file> [start]`**（P1） | 文本 schedule 注入 `MCU_PostUART`；到点检查环形缓冲余量，满则延后；默认起点 200M | 与 `-demo`/`-mocknote` 同时用要文档化优先级；buffer 8192B（`mcu.h:445`）不是瓶颈，但仍需 backpressure 防覆盖 |
-| **G6 音频 baseline 冻结**（P0，**待办/需用户在场**） | 在 stock 可信期跑一次 `-wav:`+`-audiowin`（300M–320M）+ `-audiohash 320M` + `-hashdump`@300M，存 `mk2cpp/out/m4/baselines/`（本地），记 SHA256；**当前尚未冻结** | 必须在 M4 改动落地**之前**生成；以后每次改 stock 路径后重冻（并解释原因） |
+| **G6 音频 baseline 冻结**（P0，**已冻结 2026-09-11**） | 用 stock 跑 `-wav:`+`-audiowin`（300M–320M）+ `-audiohash 320M` + `-hashdump`@320M，存 `tools/baselines/m4_audio/`（本地 fixture，gitignore，不入 git），以 `SHA256SUMS.txt` 冻结四个文件；`m4_audio_null.ps1 -CheckBaseline` 先验 SHA256SUMS 再要求本次 stock 的 WAV payload/`-audiohash` 与基准一致（不符=FAIL，基准缺失=SKIP） | 基准目录固定为 `tools/baselines/m4_audio/`；以后每次改 stock PCM/ROM 路径或音频 tap 后重冻（并解释原因） |
 
 ### 5.2 工具侧（C，遵循「自制工具优先 C」，放 `mk2cpp/tools/`）
 
@@ -433,7 +436,9 @@ summary.txt / plan.txt           检查表 + dry-run 命令留档
 - `mk2cpp/out/m4/corpus/poly255.smf` + `poly255.sched`（≥255 同时音；来源见 §6 Q1）；
 - `mk2cpp/out/m4/corpus/poly28.smf`（16 通道密集但 ≤28 音，用于 n=28 null 的「非 demo」
   目标性素材）；
-- `mk2cpp/out/m4/baselines/stock_audio_300M_320M.wav(.meta/.audiohash)` + SHA256（G6）。
+- `tools/baselines/m4_audio/stock_300M_320M.wav(.wav.meta/.audiohash/.state.hash)`
+  + `SHA256SUMS.txt`（G6，已冻结；本地 fixture、gitignore，校验/重冻见
+  `tools/baselines/README.md`）。
 
 ---
 
@@ -458,8 +463,12 @@ summary.txt / plan.txt           检查表 + dry-run 命令留档
    `mk2cpp/out/m4/corpus/`（不入 git）。**当前待提供**。
 2. **Q2 听感验收安排（阻塞结论）**：n=28 A/B 与 255 压力需要在场听/看；需约定时间与
    运行次数（建议每级 2 次：一次自动对比 + 一次人工听感）。
-3. **G6 音频 baseline 冻结**：在 M4 实现动工前先跑一次 stock 300M–320M 音频 dump 并
-   冻结（需用户在场，一次 run 约 15s + 超时保护）。**当前尚未冻结**。
+3. **G6 音频 baseline 冻结**：已在 stock 可信期跑完并冻结于
+   `tools/baselines/m4_audio/`（`stock_300M_320M.wav/.wav.meta/.audiohash/.state.hash`
+   + `SHA256SUMS.txt`；2026-09-11，本地 fixture、gitignore）。
+   `m4_audio_null.ps1 -CheckBaseline` 已接入：SHA256SUMS 不符=FAIL，
+   本次 stock 的 WAV payload/`-audiohash` 必须与基准一致；基准缺失=SKIP。
+   改动 stock PCM/ROM 路径或音频 tap 后需重冻（用户在场）并更新 SHA256SUMS。
 4. **wav 窗口/时长**：默认自动对照 `[300M,320M)`、听感可 `[300M,400M)`；是否要更长
    （例如完整 demo 段）；是否接受 `-audiowin`（08 只提了 `-wav:`/`-audiohash`，见 §2.2）。
 5. **09 §7 S1–S6**（`-voices:n` 单独行为、引擎状态归属、L1 范围/周期协议、T 检查、
