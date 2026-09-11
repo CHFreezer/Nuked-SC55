@@ -287,18 +287,27 @@ inline int32_t multi(int32_t val1, int8_t val2)
     return val1;
 }
 
+/* Positive saturation cap in the normalized float domain: 20-bit two's
+ * complement max is 0x7ffff (524287), not 2^19 (0x80000). Using exactly
+ * +1.0f would convert to 0x80000, which downstream multi() sign-extends as
+ * -524288 (positive full scale flipped to negative full scale). */
+static const float kSatPos = 524287.0f / 524288.0f;
+
 static inline int clamp20(float x)
 {
-    if (x > 1.0f)
-        x = 1.0f;
+    int v;
+    if (x != x)
+        return 0; /* NaN from an unbounded runaway: silence instead of UB */
+    if (x > kSatPos)
+        x = kSatPos;
     else if (x < -1.0f)
         x = -1.0f;
-    return (int)(x * 524288.0f);
-}
-
-static inline float sats(float x)
-{
-    return x > 1.0f ? 1.0f : (x < -1.0f ? -1.0f : x);
+    v = (int)(x * 524288.0f); /* Roland cvttss2si: truncate toward zero */
+    if (v > 524287)
+        v = 524287;
+    else if (v < -524288)
+        v = -524288;
+    return v;
 }
 
 static const int interp_lut[3][128] = {
@@ -1381,26 +1390,31 @@ void PCM_Update(uint64_t cycles)
 
             if (pcm_float)
             {
-                float A1 = (float)(int8_t)(filter >> 8);
-                float A2 = (float)((filter >> 1) & 127);
-                float Bc = (float)reg2_6;
-                const float g1 = A1 / 64.0f + A2 / 8192.0f;
-                const float g2 = Bc / 64.0f;
+                /* Normalized scalar float domain: same difference equations and
+                 * coefficient mapping as the chip, but the state is continuous
+                 * (not quantized to 20 bits) and unsaturated (SC-GS VSTi style).
+                 * The only 20-bit boundary is the output conversion below. */
+                const float a1 = (float)(int8_t)(filter >> 8) / 64.0f;
+                const float a2 = (float)((filter >> 1) & 127) / 8192.0f;
+                const float bc = (float)reg2_6 / 64.0f;
 
                 int tests = test;
                 tests <<= 12;
                 tests >>= 12;
-                float xf = (float)tests / 524288.0f;
+                const float xf = (float)tests / 524288.0f;
 
                 float f1 = pcm.fstate[slot][0];
                 float f2 = pcm.fstate[slot][1];
 
-                float state2_new = sats(f2 + f1 * g1);
-                float subvar     = sats(state2_new + f1 * g2);
-                float out_v3     = sats(xf - subvar);
-                float state1_new = sats(f1 + out_v3 * g1);
+                float state2_new = f2 + f1 * a1;     /* v2 */
+                state2_new       += f1 * a2;         /* v1 */
+                float subvar     = state2_new + f1 * bc;
+                float out_v3     = xf - subvar;      /* v3 */
+                float state1_new = f1 + out_v3 * a1; /* v4 */
+                state1_new       += out_v3 * a2;     /* v5 */
 
                 ram1[3] = (uint32_t)clamp20(state2_new);
+                ram1[1] = (uint32_t)clamp20(state1_new);
                 v3 = clamp20(out_v3);
 
                 pcm.fstate[slot][0] = state1_new;

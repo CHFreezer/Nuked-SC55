@@ -185,7 +185,7 @@ int mcu_st = 0; // 0 - SC-55mk2, 1 - SC-55ST
 int mcu_jv880 = 0; // 0 - SC-55, 1 - JV880
 int mcu_scb55 = 0; // 0 - sub mcu (e.g SC-55mk2), 1 - no sub mcu (e.g SCB-55)
 int mcu_sc155 = 0; // 0 - SC-55(MK2), 1 - SC-155(MK2)
-int pcm_float = 0; // S1: pure-float resonant filter, per-add ±1.0 saturation (independent of chip select)
+int pcm_float = 0; // pure-float resonant filter, all chip selects
 float master_gain = 1.0f; // overall output volume multiplier (linear), applied in MCU_PostSample before int16 clamp
 
 static int ga_int[8];
@@ -2594,8 +2594,9 @@ int main(int argc, char *argv[])
                 printf("  -gain:<amount>                 Set overall output volume: a linear multiplier\n"
                        "                                 (e.g. 2 = double, 0.5 = half) or decibels (e.g.\n"
                        "                                 6db = double, -6db = half). scale = 10^(db/20).\n");
-                printf("  -float                         Pure-float resonant filter (per-add ±1.0\n"
-                       "                                 saturation), all ROM sets.\n");
+                printf("  -float                         Pure-float resonant filter (normalized\n"
+                       "                                 scalar domain, no per-add saturation),\n"
+                       "                                 all ROM sets.\n");
                 printf("\n");
                 printf("ROM set:\n");
                 printf("  -mk2                           Use SC-55mk2 ROM set.\n");
@@ -2750,7 +2751,7 @@ int main(int argc, char *argv[])
     }
 
     if (pcm_float)
-        printf("Filter: running in float precision.\n");
+        printf("Filter: running in float precision (no per-add saturation).\n");
 
     if (master_gain != 1.0f)
         printf("Output gain: %.3f\n", master_gain);
