@@ -37,8 +37,10 @@
 ## 4. 目录卫生与 git
 
 - 只提交代码与文档；`src/gen/`、`out/`、`build/`、ROM、trace、快照、日志全部本地。
-- 忽略规则写在公开 `.gitignore`（随仓库提交，`.gitignore:91-95` 已含 `mk2cpp/`
-  派生路径）。**不要**再写进本地 `.git/info/exclude`。提交前用 `git status`
+- `mk2cpp/` 已是公开目录，其派生路径的忽略规则写在公开 `.gitignore` 的
+  `mk2cpp:` 段（`mk2cpp/build/` 由通用 `build/` 规则命中），随仓库共享。
+  **不得在任何公开文件（md、`.gitignore` 注释等）中写出本地私有路径名或
+  本地目录布局**；本地资料的忽略方式不入库文档。提交前用 `git status`
   确认无派生文件、`git check-ignore` 确认命中 `.gitignore`。
 - 调试产物写 `out/` 或 `%TEMP%\opencode\`，收尾清空。
 - `../build/` 只放运行资产（可执行文件必须与 ROM 同目录，GT 以 exe 目录为 BasePath）。

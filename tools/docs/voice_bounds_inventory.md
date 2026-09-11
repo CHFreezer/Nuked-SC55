@@ -5,7 +5,7 @@ Research-only inventory (no code changed). Evidence base:
 - `tools/baselines/dasm_full.txt` — trace disassembly (flat addresses; rom1 = PC,
   rom2 = `0x40000 + fileoff`). All PC/bytes below are quoted from it.
 - `tools/baselines/flow_main.txt` — executed control-flow edges (call sites).
-- `roms/SC-55mk2-v1.01/rom1.bin`, `rom2.bin` — raw bytes.
+- Local ROM images `rom1.bin`, `rom2.bin` — raw bytes.
 - GT (`src/`) for instruction semantics: `MCU_Jump_JMP` cntjmp at
   `src/mcu_opcodes.cpp:377-385`, PCM reg decode `src/pcm.cpp:123-145,587`,
   memory map `src/mcu.cpp:674-714`.

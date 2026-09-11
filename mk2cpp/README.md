@@ -11,7 +11,7 @@ GT 是可跑多种固件的 H8 模拟器，本工程翻译的是 **MK2 的 ROM �
 集成开关/符号统一 `mk2cpp`/`MK2CPP_`/`mk2c_` 前缀。
 
 Ground Truth（不可怀疑）：
-- ROM 字节（本地 `../roms/` 或 `../build/`，**不入 git**）
+- ROM 字节（本地资产目录或 `../build/`，**不入 git**）
 - GT 仿真器 `../src/`（H8 语义、PCM、定时器、SM）
 - 既有反汇编基线 `../tools/baselines/`（本地 fixture）
 
@@ -35,14 +35,14 @@ mk2cpp/
 
 ## 构建（GT 集成）
 
-GT 用 Ninja + clang-cl 构建，SDL2 用仓库内 `local/sdl2`（`SDL2_DIR` 指向其 cmake 目录）：
+GT 用 Ninja + clang-cl 构建，SDL2 用本地 SDL2 目录（`SDL2_DIR` 指向其 cmake 目录）：
 
 ```
 cmake -S . -B build -G Ninja ^
   -DCMAKE_C_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe" ^
   -DCMAKE_CXX_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe" ^
   -DCMAKE_BUILD_TYPE=Release ^
-  -DSDL2_DIR="<repo>/local/sdl2/cmake"
+  -DSDL2_DIR="<本地 SDL2 目录>/cmake"
 cmake --build build
 ```
 
@@ -58,10 +58,13 @@ cmake --build build
 1. **研究先行**：遇到说不清的阻碍，先停实现、补证据文档，再恢复
    （见 `../tools/docs/evidence_protocol.md` 与 `polyphony_256_todo.md` 施工规则）。
 2. **只提交代码与文档**：ROM 及派生产物（反汇编、trace、快照、`src/gen/` 输出）
-   一律本地；忽略规则放公开 `.gitignore`（已含 `mk2cpp/` 派生路径，`.gitignore:91-95`），
-   **不要**写进本地 `.git/info/exclude`。
+   一律本地。`mk2cpp/` 是**已入库的公开目录**，其内部派生路径的忽略规则写在
+   公开 `.gitignore` 的 `mk2cpp:` 段，随仓库共享；**不得在任何公开文件（md、
+   `.gitignore` 注释等）中写出本地私有路径名或本地目录布局**，本地资料的
+   忽略方式不入库文档。
    提交前需确认：`mk2cpp/out/`、`mk2cpp/build/`、`mk2cpp/src/gen/`、
-   `mk2cpp/tests/*.bin|*.txt` 均被 `.gitignore` 命中（`git check-ignore` 验证）。
+   `mk2cpp/tests/*.bin|*.txt` 均被 `.gitignore` 命中（`git check-ignore` 验证；
+   `mk2cpp/build/` 由通用 `build/` 规则命中）。
 3. **等价性**：M1–M3 期间，同一输入下 `-mk2cpp` 模式与默认解释器模式必须逐指令/逐状态一致
    （同一 GT 二进制两模式对照）；任何简化都必须标注并给出 oracle。M4 起才允许语义化改写
    改变实现方式，且必须通过音频/行为对照。

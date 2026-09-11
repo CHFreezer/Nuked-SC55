@@ -34,11 +34,14 @@ to `clang` on PATH). Executables are produced next to their sources.
 
 Only **docs and code** are committed. ROM data and anything derived from it
 (disassembly, PC/flow sets, traces, snapshots, logs) must never enter git — see
-`docs/evidence_protocol.md` §0.0. Ignore rules live in the local
-`.git/info/exclude` (never in the public `.gitignore`, which would leak path
-and purpose hints in this fork); fixture directories hold only local files,
-with just their explanatory README tracked. This rule cannot be enforced by
-the repository itself, so it is on every contributor.
+`docs/evidence_protocol.md` §0.0. `tools/` and `mk2cpp/` are already public
+trees, so ignore rules for artifacts inside them live in the committed
+`.gitignore` (`tools/baselines/*`, `tools/python/*`, `*.exe`, `mk2cpp/out/`,
+`mk2cpp/src/gen/`, ...) and are shared by every contributor. Never write local
+private path names or local directory layouts into any committed file (docs,
+comments, commit messages); local-only material is excluded locally and stays
+out of the repo. This rule cannot be enforced by the repository itself, so it
+is on every contributor.
 
 ## Directory hygiene
 

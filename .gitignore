@@ -82,6 +82,8 @@ CMakeSettings.json
 
 # Vendored assets packages shouldn't appear at the GIT history
 /assets/
+# tools/ and mk2cpp/ are already public trees: generated/fixture artifacts
+# inside them are ignored here, so every contributor shares the rules.
 # keep the folders, ignore their contents except the tracked README note
 tools/python/*
 !tools/python/README.md
@@ -90,6 +92,7 @@ tools/baselines/*
 
 # mk2cpp: ROM-derived / debug artifacts (generated locally, never committed)
 mk2cpp/out/
+mk2cpp/build/
 mk2cpp/src/gen/
 mk2cpp/tests/*.bin
 mk2cpp/tests/*.txt
