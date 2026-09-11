@@ -76,7 +76,7 @@ cmake --build build
 | 阶段 | 交付 | 验收 oracle |
 |---|---|---|
 | M1 ✅ | `mk2cpp.h` 集成（`-mk2cpp` + 混合回退）+ h8lift（h8dec/h8part/h8emit）+ tracediff + cover + hashdump | **已达成（2026-09-11）**：9217 PC 注册；boot 0–3M 与 demo 200–202M 两模式 trace + 状态哈希 + 基准 trace 全部一致 |
-| M2 | 主固件全执行面翻译（含未执行可达路径） | demo/快照长跑 0 分歧；覆盖率 100%（执行集） |
+| M2 ✅ | 主固件全执行面翻译（含未执行可达路径） | **已达成（2026-09-11）**：15999 PC（9217 执行集 + 6782 可达新增）全译、0 stub（13 处 `TODO(gt)`）；boot+demo200 两模式 trace + 状态哈希与 M1 基线一致 |
 | M3 ✅ | 子 MCU 固件翻译（`smemit` 全译 rom_sm 4KB）+ SM/主 CPU 5× 时序对接 | **已达成（2026-09-11）**：4096 SM PC 全译；boot+demo200 两模式 `s` 行 SM trace 逐条一致、hashdump 与 M1 基线同哈希（含 `hash.sm`/`sm_ram`/`hash.lcd_state`）；执行集（45/251 PC）全落翻译区间 |
 | M4 | voice/PCM 语义化改写 + 256 复音 | n=28 音频 null 测试；n=256 长跑稳定 |
 

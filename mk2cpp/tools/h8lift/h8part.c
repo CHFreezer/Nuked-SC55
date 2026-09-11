@@ -358,7 +358,7 @@ int main(int argc, char **argv)
     u32vec pcs;
     uint32_t *es = NULL, *ed = NULL;
     size_t ne = 0;
-    long pc_lines, flow_lines;
+    long pc_lines, vec_lines = 0, static_lines = 0, flow_lines;
     uint8_t *indeg;
     uint8_t *reasons;
     pinsn_t *ins;
@@ -394,13 +394,13 @@ int main(int argc, char **argv)
         die("no executed PCs in '%s'", pc_path);
     if (vec_path) {
         size_t before = pcs.n;
-        read_pcs(vec_path, &pcs);
+        vec_lines = read_pcs(vec_path, &pcs);
         fprintf(stderr, "h8part: vec=%s (%zu new, total %zu)\n",
                 vec_path, pcs.n - before, pcs.n);
     }
     if (static_path) {
         size_t before = pcs.n;
-        read_pcs(static_path, &pcs);
+        static_lines = read_pcs(static_path, &pcs);
         fprintf(stderr, "h8part: static=%s (%zu new, total %zu)\n",
                 static_path, pcs.n - before, pcs.n);
     }
@@ -581,11 +581,16 @@ int main(int argc, char **argv)
     fprintf(st, "rom1 = %s\n", rom1_path);
     fprintf(st, "rom2 = %s\n", rom2_path);
     fprintf(st, "pc_main = %s\n", pc_path);
+    fprintf(st, "pc_vec = %s\n", vec_path ? vec_path : "(none)");
+    fprintf(st, "pc_static = %s\n", static_path ? static_path : "(none)");
     fprintf(st, "flow_main = %s\n", flow_path);
     fprintf(st, "outdir = %s\n", outdir);
-    fprintf(st, "pc lines = %ld\n", pc_lines);
+    fprintf(st, "pc lines = %ld (main %ld + vec %ld + static %ld)\n",
+            pc_lines + vec_lines + static_lines, pc_lines, vec_lines,
+            static_lines);
     fprintf(st, "pc unique = %zu\n", pcs.n);
-    fprintf(st, "pc duplicates = %ld\n", pc_lines - (long)pcs.n);
+    fprintf(st, "pc duplicates = %ld\n",
+            pc_lines + vec_lines + static_lines - (long)pcs.n);
     fprintf(st, "flow lines = %ld\n", flow_lines);
     fprintf(st, "flow edges = %zu\n", ne);
     fprintf(st, "instructions = %zu\n", pcs.n);
