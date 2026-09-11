@@ -1,17 +1,17 @@
 ﻿/*
  * HAND voice/voice_materialize -- PCM voice materialize / gate / param chain
- * (M4 S1..S5, S7..S10): materialize, coeff_copy, tone_fields, cross_copy,
- * gate_setup, mask_set + shared tail, flush_off/flush_on, param_write,
+ * (M4 S1..S10): materialize, coeff_copy, tone_fields, cross_copy, gate_setup,
+ * coeff_calc, mask_set + shared tail, flush_off/flush_on, param_write,
  * loop_write, param_ack, pcm_play.
  * rom1 sha256 8a1eb33c7599b746c0c50283e4349a1bb1773b5c0ec0e9661219bf6c067d2042
  * rom2 sha256 a4c9fd821059054c7e7681d61f49ce6f42ed2fe407a7ec1ba0dfdc9722582ce0
- * hand_rev 5
+ * hand_rev 7
  *
  * Replaces these rom1 routines:
  *
- *   0x53eb materialize   0x53eb..0x546c (+ 0x546d rts trampoline): one L1
- *                        block (IML=7, stock cannot be interrupted inside)
- *   0x5d6e coeff_copy    0x5d6e..0x5dc2: one L1 block (leaf, 23 instructions)
+ *   0x53eb materialize   0x53eb..0x546c (+ 0x546d rts trampoline): per-PC
+ *                        (round 6; see the S1 comment for the L1 retirement)
+ *   0x5d6e coeff_copy    0x5d6e..0x5dc2: per-PC (round 6)
  *   0x3580 tone_fields   0x3580..0x3614: one entry per instruction (L0-style)
  *   0x3a9e cross_copy    0x3a9e..0x3bb1: one entry per instruction (0x3a9e
  *                        and 0x3ac8 entries both covered)
@@ -21,16 +21,20 @@
  *                        out-of-scope deep water)
  *   0x546e mask_set      + shared pending-command tail 0x5492..0x54cb: per-PC
  *                        (IML=0, interrupted inside in the captured runs)
- *   0x54fb flush_off     0x54fb..0x5521: one L1 block (IML=7), then the six
+ *   0x54fb flush_off     0x54fb..0x5521: per-PC (round 6), then the six
  *                        existing per-PC PCM MOVS/MOVL handlers
- *   0x564a flush_on      0x564a..0x565e / 0x5668..0x5670: two L1 blocks
- *   0x5533 param_write   0x5533..0x5625: one L1 block, both exits
+ *   0x564a flush_on      0x564a..0x565e / 0x5668..0x5670: per-PC (round 6)
+ *   0x5533 param_write   0x5533..0x5625: per-PC (round 6), both exits
  *   0x5626 loop_write    per-PC: its PCM status busy-wait needs one host step
  *                        per iteration (device updates), see comment below
  *   0x54cc param_ack    0x54cc..0x54fa: per-PC (IML=0, trapa #0x10 loop)
  *   0x52cb pcm_play     0x52cb..0x53e8 (both entries): per-PC; bsr targets
  *                        are the registered child routines, BRA 0x51fc exits
  *                        do not pop the stack
+ *   0x5998 coeff_calc   0x5998..0x5d6d: per-PC (IML=0, dense resume PCs); the
+ *                        fixed-point maths is transcribed as named operations
+ *                        (mulxu8/mulxu16_imm, table sum, clamp, shift scaling),
+ *                        no algebraic rewriting
  *
  * S0 data model: the firmware keeps the authoritative bytes in page-0 SRAM, so
  * the translation reads/writes the same addresses as the stock instructions do
@@ -42,19 +46,16 @@
  * bases + AoS offsets (below), all byte-exact against the ROM.
  *
  * Ownership / interrupt boundary evidence:
- *  - materialize is called from pcm_play before 0x5304/0x539c BCLR_ANDC, i.e.
- *    with IML=7 (dispatcher 0x5207 ORC). MCU_Interrupt_Handle only takes a
- *    maskable source when `mask < level` (src/mcu_interrupt.cpp:202), and
- *    neither trapa nor exception can originate inside the routine, so the
- *    stock run cannot be interrupted inside 0x53eb..0x546d. `-tracepc` over
- *    mock 144M / wide / demo296 / demo300 / demo312 confirms it (not one
- *    handler PC between 0x53eb and the 0x546c rts), so one L1 block matches
- *    both state and cycle timing. No split point is needed.
- *  - coeff_copy runs at IML=0 and is a plain leaf; no device writes, only
- *    word copies. It is registered below as one L1 block; the demo windows
- *    observed so far never enter it (the single-neighbour pcm_play branch
- *    0x5390 skips 0x5317), so the hash gate exercises it only when the main
- *    pcm_play path runs.
+ *  - materialize and coeff_copy were L1 blocks until round 6. Interrupt
+ *    deferral was ruled out (materialize runs at IML=7 between 0x5304/0x539c
+ *    BCLR_ANDC; coeff_copy is a plain leaf), but an L1 step also batches the
+ *    host's midiseq_poll/SM_Update: a byte posted while the block executes
+ *    lands in the SM ring before the SM catch-up replays that span, so the SM
+ *    consumes it earlier in its own time than stock. Caught at c212.565M (the
+ *    [565264,565660) materialize step spanning the 565572 byte) where the SM
+ *    state diverged; both routines are per-PC like S3-S10 now. The same rule
+ *    applies to every remaining L1 block: the span must not cover a due
+ *    -midiseq post.
  *  - tone_fields / gate_setup / cross_copy all run at IML=0 and the stock run
  *    is interrupted at many different instruction boundaries inside them
  *    (the captured runs alone resume at 12 tone_fields and 8 gate_setup PCs;
@@ -72,8 +73,8 @@
  *    [144,175) / [200,296) / [296,340)) but its union trace does have
  *    resume edges, so it uses the same per-instruction scheme.
  *
- * Materialize path counts (returns the exact stock instruction count; the
- * host adds 12*(n-1) on top of its own +12):
+ * Materialize path counts (per-PC entries now; kept as the decode record; the
+ * host adds one +12 per entry):
  *   common 53eb..542f            = 20
  *   + 5431 (cf90 bit7 set)       = 21
  *   5436..544f                   = +9
@@ -320,163 +321,122 @@ void mulxu16(uint16_t multiplier, uint16_t &high, uint16_t &low)
 uint32_t br_addr(uint16_t disp) { return (uint32_t)(uint16_t)((mcu.br << 8) | disp); }
 uint32_t dp_addr(uint16_t disp) { return ((uint32_t)mcu.dp << 16) | disp; }
 
-/* ---- S1: materialize 0x53eb-0x546c -------------------------------------- */
+/* ---- S1: materialize 0x53eb-0x546c (per instruction) -------------------- */
 
-uint32_t routine_materialize(void)
+/*
+ * materialize runs one H8 instruction per MK2CPP_Step (each entry returns 1).
+ * The round-6 L1 block was retired: `-midiseq` posts scheduled bytes only at
+ * main-loop boundaries, so a multi-instruction step that spans a due post
+ * defers it to the block end; the SM_Update that follows then catches the SM
+ * up over the whole span with the byte already in the ring, i.e. the SM
+ * consumes it before the main cycle it was posted at. Captured at c212.565M:
+ * the [212565264,212565660) materialize step spanned the byte due at
+ * 212565572; the SM delivered it 346 main cycles early and its RAM/register
+ * state diverged (f138 -> f8d2 at sm 1062826368 instead of the stock f151).
+ * Per-instruction stepping keeps midiseq_poll / SM_Update / PCM_Update
+ * cadence identical to stock, like S3-S10. 0x546d is a real (empty) bsr
+ * target; its push/pop stack writes are replayed for byte-exact SRAM.
+ */
+
+uint32_t routine_materialize_step(void)
 {
-    uint32_t n = 0;
     uint16_t &r0 = mcu.r[0];
     uint16_t &r1 = mcu.r[1];
     uint16_t &r3 = mcu.r[3];
     uint16_t &r6 = mcu.r[6];
 
-    /* 53eb MOVG2 r1 r3 / 53ed ADD r3 r3 / 53ef MOVG2 @r3+0x64d6 r0:
-     * r3 = 2*slot and r0 = AoS P(slot) from the ROM pointer table. */
-    r3 = r1;
-    MCU_SetStatusCommon(r1, 1);
-    n++;
-    r3 = (uint16_t)MCU_ADD_Common(r3, r3, 0, 1);
-    n++;
-    load16(r0, ind_addr(3, kAosPtrTable));
-    n++;
-
-    /* 53f3..5422: record header + pointer words. */
-    store16(ind_addr(0, (uint16_t)kAosSlot), r1);      /* 53f3 P-2 = slot */
-    n++;
-    load8(r6, ind_addr(1, kSoaCfe4));                  /* 53f6 */
-    n++;
-    store8(ind_addr(0, kAosE1), (uint8_t)r6);          /* 53fa P+0x98 */
-    n++;
-    load8(r6, ind_addr(1, kSoaD038));                  /* 53fe */
-    n++;
-    store8(ind_addr(0, kAosE2), (uint8_t)r6);          /* 5402 P+0x99 */
-    n++;
-    load8(r6, ind_addr(1, kSoaD08c));                  /* 5406 */
-    n++;
-    store8(ind_addr(0, kAosE3), (uint8_t)r6);          /* 540a P+0x9a */
-    n++;
-    load16(r6, ind_addr(3, kSoaCfac));                 /* 540e */
-    n++;
-    store16(ind_addr(0, kAosP1), r6);                  /* 5412 P+0x9c */
-    n++;
-    load16(r6, ind_addr(3, kSoaD000));                 /* 5416 */
-    n++;
-    store16(ind_addr(0, kAosP2), r6);                  /* 541a P+0x9e */
-    n++;
-    load16(r6, ind_addr(3, kSoaD054));                 /* 541e */
-    n++;
-    store16(ind_addr(0, kAosP3), r6);                  /* 5422 P+0xa0 */
-    n++;
-
-    /* 5426..542f: cf90 byte -> P-0x3b; bit7 forces ad0e[slot] = 0xff. */
-    load8(r6, ind_addr(1, kSoaCf90));                  /* 5426 */
-    n++;
-    store8(ind_addr(0, (uint16_t)kAosFlag45), (uint8_t)r6); /* 542a */
-    n++;
-    MCU_SetStatus((r6 & 0x80u) == 0, STATUS_Z);        /* 542d BTSTI r6 #7 */
-    n++;
-    n++;                                               /* 542f BEQ 5 */
-    if ((mcu.sr & STATUS_Z) == 0)
+    switch (mcu.pc)
     {
-        store8(ind_addr(1, kAd0e), 0xff);              /* 5431 MOVG #0xff */
-        n++;
-    }
-
-    /* 5436..5446: tone index -> P+0x9b, tone pointer -> P+0x2e. */
-    clr16(r3);                                         /* 5436 */
-    n++;
-    load8(r3, ind_addr(1, kSoaCe78));                  /* 5438 */
-    n++;
-    store8(ind_addr(0, kAosToneIdx), (uint8_t)r3);     /* 543c P+0x9b */
-    n++;
-    r3 = (uint16_t)MCU_ADD_Common(r3, r3, 0, 1);       /* 5440 ADD r3 r3 */
-    n++;
-    load16(r3, ind_addr(3, kTonePtrTable));            /* 5442 @r3+0x7218 */
-    n++;
-    store16(ind_addr(0, kAosToneRec), r3);             /* 5446 P+0x2e */
-    n++;
-
-    /* 5449..544f: r3 = 0, then TST d0fc[slot] and BEQ/BMI. */
-    clr16(r3);                                         /* 5449 */
-    n++;
+    case 0x53eb: r3 = r1;                                       mcu.pc = 0x53ed; break;
+    case 0x53ed: add16(r3, r3);                                 mcu.pc = 0x53ef; break;
+    case 0x53ef: load16(r0, ind_addr(3, kAosPtrTable));         mcu.pc = 0x53f3; break;
+    case 0x53f3: store16(ind_addr(0, (uint16_t)kAosSlot), r1);  mcu.pc = 0x53f6; break;
+    case 0x53f6: load8(r6, ind_addr(1, kSoaCfe4));              mcu.pc = 0x53fa; break;
+    case 0x53fa: store8(ind_addr(0, kAosE1), (uint8_t)r6);      mcu.pc = 0x53fe; break;
+    case 0x53fe: load8(r6, ind_addr(1, kSoaD038));              mcu.pc = 0x5402; break;
+    case 0x5402: store8(ind_addr(0, kAosE2), (uint8_t)r6);      mcu.pc = 0x5406; break;
+    case 0x5406: load8(r6, ind_addr(1, kSoaD08c));              mcu.pc = 0x540a; break;
+    case 0x540a: store8(ind_addr(0, kAosE3), (uint8_t)r6);      mcu.pc = 0x540e; break;
+    case 0x540e: load16(r6, ind_addr(3, kSoaCfac));             mcu.pc = 0x5412; break;
+    case 0x5412: store16(ind_addr(0, kAosP1), r6);              mcu.pc = 0x5416; break;
+    case 0x5416: load16(r6, ind_addr(3, kSoaD000));             mcu.pc = 0x541a; break;
+    case 0x541a: store16(ind_addr(0, kAosP2), r6);              mcu.pc = 0x541e; break;
+    case 0x541e: load16(r6, ind_addr(3, kSoaD054));             mcu.pc = 0x5422; break;
+    case 0x5422: store16(ind_addr(0, kAosP3), r6);              mcu.pc = 0x5426; break;
+    case 0x5426: load8(r6, ind_addr(1, kSoaCf90));              mcu.pc = 0x542a; break;
+    case 0x542a: store8(ind_addr(0, (uint16_t)kAosFlag45), (uint8_t)r6); mcu.pc = 0x542d; break;
+    case 0x542d: MCU_SetStatus((r6 & 0x80u) == 0, STATUS_Z);    mcu.pc = 0x542f; break;
+    case 0x542f: mcu.pc = (mcu.sr & STATUS_Z) ? 0x5436 : 0x5431; break;
+    case 0x5431: store8(ind_addr(1, kAd0e), 0xff);              mcu.pc = 0x5436; break;
+    case 0x5436: clr16(r3);                                     mcu.pc = 0x5438; break;
+    case 0x5438: load8(r3, ind_addr(1, kSoaCe78));              mcu.pc = 0x543c; break;
+    case 0x543c: store8(ind_addr(0, kAosToneIdx), (uint8_t)r3); mcu.pc = 0x5440; break;
+    case 0x5440: add16(r3, r3);                                 mcu.pc = 0x5442; break;
+    case 0x5442: load16(r3, ind_addr(3, kTonePtrTable));        mcu.pc = 0x5446; break;
+    case 0x5446: store16(ind_addr(0, kAosToneRec), r3);         mcu.pc = 0x5449; break;
+    case 0x5449: clr16(r3);                                     mcu.pc = 0x544b; break;
+    case 0x544b:
     {
-        uint8_t sel = MCU_Read(ind_addr(1, kSoaD0fc)); /* 544b TST */
+        uint8_t sel = MCU_Read(ind_addr(1, kSoaD0fc));
         MCU_SetStatusCommon(sel, 0);
         MCU_SetStatus(0, STATUS_C);
-        n++;
-        n++;                                           /* 544f BEQ */
-        if (sel == 0)
-        {
-            /* 545a movi r3 #0x8748; 545d bsr -> 546d; 545f..5469; 546c rts */
-            movi16(r3, kAosBaseZero);                  /* 545a */
-            n++;
-            MCU_PushStack(0x545fu);                    /* 545d bsr */
-            n++;
-            mcu.pc = MCU_PopStack();                   /* 546d rts */
-            n++;
-            goto common_tail;
-        }
-        if (sel & 0x80u)
-        {
-            /* 5451 BMI -> 5469: r3 stays 0, P+0x30 = 0. */
-            n++;                                       /* 5451 BMI */
-            store16(ind_addr(0, kAosToneVal), r3);     /* 5469 */
-            n++;
-            mcu.pc = MCU_PopStack();                   /* 546c rts */
-            n++;
-            return n;
-        }
-        /* E3 arm 0x5453-0x5458 (bytes 0x5453: 5b 8b d4 0e 15 20 05):
-         * movi r3 #0x8bd4; 5456 bsr -> 546d; 5458 BRA +5 -> 545f. */
-        movi16(r3, kAosBasePos);                       /* 5453 */
-        n++;
-        MCU_PushStack(0x5458u);                        /* 5456 bsr */
-        n++;
-        mcu.pc = MCU_PopStack();                       /* 546d rts */
-        n++;
-        n++;                                           /* 5458 BRA 0x545f */
+        mcu.pc = 0x544f;
+        break;
     }
-common_tail:
-    clr16(r6);                                         /* 545f CLR r6 */
-    n++;
-    load8(r6, ind_addr(1, kSoaCecc));                  /* 5461 */
-    n++;
-    r3 = (uint16_t)MCU_ADD_Common(r3, r6, 0, 1);       /* 5465 ADD r6 r3 */
-    n++;
-    n++;                                               /* 5467 BRA 0x5469 */
-    store16(ind_addr(0, kAosToneVal), r3);             /* 5469 P+0x30 */
-    n++;
-    mcu.pc = MCU_PopStack();                           /* 546c rts */
-    n++;
-
-    return n;
+    case 0x544f: mcu.pc = (mcu.sr & STATUS_Z) ? 0x545a : 0x5451; break;
+    case 0x5451: mcu.pc = (mcu.sr & STATUS_N) ? 0x5469 : 0x5453; break;
+    case 0x5453: movi16(r3, kAosBasePos);                       mcu.pc = 0x5456; break;
+    case 0x5456: MCU_PushStack(0x5458);                         mcu.pc = 0x546d; break;
+    case 0x5458: mcu.pc = 0x545f; break;                        /* BRA +5 -> 545f */
+    case 0x545a: movi16(r3, kAosBaseZero);                      mcu.pc = 0x545d; break;
+    case 0x545d: MCU_PushStack(0x545f);                         mcu.pc = 0x546d; break;
+    case 0x545f: clr16(r6);                                     mcu.pc = 0x5461; break;
+    case 0x5461: load8(r6, ind_addr(1, kSoaCecc));              mcu.pc = 0x5465; break;
+    case 0x5465: add16(r3, r6);                                 mcu.pc = 0x5467; break;
+    case 0x5467: mcu.pc = 0x5469; break;                        /* BRA 0 -> 5469 */
+    case 0x5469: store16(ind_addr(0, kAosToneVal), r3);         mcu.pc = 0x546c; break;
+    case 0x546c: mcu.pc = MCU_PopStack(); break;                /* rts */
+    case 0x546d: mcu.pc = MCU_PopStack(); break;                /* trampoline rts */
+    default: break;
+    }
+    return 1;
 }
 
-/* ---- S2: coeff_copy 0x5d6e-0x5dc2 ---------------------------------------- */
+/* ---- S2: coeff_copy 0x5d6e-0x5dc2 (per instruction) ---------------------- */
 
-uint32_t routine_coeff_copy(void)
+uint32_t routine_coeff_copy_step(void)
 {
-    /* In r0 = dst P, r2 = src P; 11 word copies in ROM order. */
-    static const int16_t kOff[11] = {
-        kCoef86, kCoef8a, kCoef88, kCoefP80, kCoefP114,
-        kCoef96, kCoef8e, kCoef94, kCoef8c, kCoef92, kCoef90,
-    };
     uint16_t &r6 = mcu.r[6];
 
-    uint32_t n = 0;
-    for (int i = 0; i < 11; i++)
+    switch (mcu.pc)
     {
-        uint16_t off = (uint16_t)kOff[i];
-        load16(r6, ind_addr(2, off));                  /* 5d6e/76/7e/86/8c/92/9a/a2/aa/b2/ba */
-        n++;
-        store16(ind_addr(0, off), r6);                 /* 5d72/7a/82/89/8f/96/9e/a6/ae/b6/be */
-        n++;
+    case 0x5d6e: load16(r6, ind_addr(2, (uint16_t)kCoef86));    mcu.pc = 0x5d72; break;
+    case 0x5d72: store16(ind_addr(0, (uint16_t)kCoef86), r6);   mcu.pc = 0x5d76; break;
+    case 0x5d76: load16(r6, ind_addr(2, (uint16_t)kCoef8a));    mcu.pc = 0x5d7a; break;
+    case 0x5d7a: store16(ind_addr(0, (uint16_t)kCoef8a), r6);   mcu.pc = 0x5d7e; break;
+    case 0x5d7e: load16(r6, ind_addr(2, (uint16_t)kCoef88));    mcu.pc = 0x5d82; break;
+    case 0x5d82: store16(ind_addr(0, (uint16_t)kCoef88), r6);   mcu.pc = 0x5d86; break;
+    case 0x5d86: load16(r6, ind_addr(2, (uint16_t)kCoefP80));   mcu.pc = 0x5d89; break;
+    case 0x5d89: store16(ind_addr(0, (uint16_t)kCoefP80), r6);  mcu.pc = 0x5d8c; break;
+    case 0x5d8c: load16(r6, ind_addr(2, (uint16_t)kCoefP114));  mcu.pc = 0x5d8f; break;
+    case 0x5d8f: store16(ind_addr(0, (uint16_t)kCoefP114), r6); mcu.pc = 0x5d92; break;
+    case 0x5d92: load16(r6, ind_addr(2, (uint16_t)kCoef96));    mcu.pc = 0x5d96; break;
+    case 0x5d96: store16(ind_addr(0, (uint16_t)kCoef96), r6);   mcu.pc = 0x5d9a; break;
+    case 0x5d9a: load16(r6, ind_addr(2, (uint16_t)kCoef8e));    mcu.pc = 0x5d9e; break;
+    case 0x5d9e: store16(ind_addr(0, (uint16_t)kCoef8e), r6);   mcu.pc = 0x5da2; break;
+    case 0x5da2: load16(r6, ind_addr(2, (uint16_t)kCoef94));    mcu.pc = 0x5da6; break;
+    case 0x5da6: store16(ind_addr(0, (uint16_t)kCoef94), r6);   mcu.pc = 0x5daa; break;
+    case 0x5daa: load16(r6, ind_addr(2, (uint16_t)kCoef8c));    mcu.pc = 0x5dae; break;
+    case 0x5dae: store16(ind_addr(0, (uint16_t)kCoef8c), r6);   mcu.pc = 0x5db2; break;
+    case 0x5db2: load16(r6, ind_addr(2, (uint16_t)kCoef92));    mcu.pc = 0x5db6; break;
+    case 0x5db6: store16(ind_addr(0, (uint16_t)kCoef92), r6);   mcu.pc = 0x5dba; break;
+    case 0x5dba: load16(r6, ind_addr(2, (uint16_t)kCoef90));    mcu.pc = 0x5dbe; break;
+    case 0x5dbe: store16(ind_addr(0, (uint16_t)kCoef90), r6);   mcu.pc = 0x5dc2; break;
+    case 0x5dc2: mcu.pc = MCU_PopStack(); break;                /* rts */
+    default: break;
     }
-    mcu.pc = MCU_PopStack();                           /* 5dc2 rts */
-    n++;
-    return n;
+    return 1;
 }
-
 
 /* ---- S3/S4/S5: per-PC hand entries -------------------------------------- */
 
@@ -994,284 +954,179 @@ uint32_t routine_mask_tail_step(void)
     return 1;
 }
 
-/* flush_off 0x54fb-0x5521 (IML=7): clear the pending mask bits from the
- * committed mask, then hand off to the six existing per-PC PCM flush handlers
+/* flush_off 0x54fb-0x5521 (IML=7): per-PC. Clear the pending mask bits from
+ * the committed mask, then hand off to the existing per-PC PCM flush handlers
  * (0x5525/27/29 in pcm_enable.cpp) and the 0x552b rts. The pending-command
- * exit (0x552c, unobserved in the captured runs) is left interpreted. */
-uint32_t routine_flush_off(void)
+ * exit (0x552c, unobserved in the captured runs) is left interpreted; like
+ * the rest of S1-S10 this is one H8 instruction per step so -midiseq posts
+ * and SM_Update keep stock cadence (round-6 L1 finding). */
+uint32_t routine_flush_off_step(void)
 {
-    uint32_t n = 0;
     uint16_t &r1 = mcu.r[1];
     uint16_t &r3 = mcu.r[3];
     uint16_t &r4 = mcu.r[4];
     uint16_t &r5 = mcu.r[5];
     uint16_t &r6 = mcu.r[6];
 
-    load16(r1, ind_addr(0, (uint16_t)-2));                     /* 54fb */
-    n++;
-    sub_mem_imm8(ind_addr(1, 0xd0e0), 0x00);                   /* 54fe */
-    n++;
-    n++;                                                       /* 5503 BNE */
-    if ((mcu.sr & STATUS_Z) == 0)
+    switch (mcu.pc)
     {
-        mcu.pc = 0x552cu;
-        return n;
+    case 0x54fb: load16(r1, ind_addr(0, (uint16_t)-2));        mcu.pc = 0x54fe; break;
+    case 0x54fe: sub_mem_imm8(ind_addr(1, 0xd0e0), 0x00);      mcu.pc = 0x5503; break;
+    case 0x5503: mcu.pc = (mcu.sr & STATUS_Z) ? 0x5505 : 0x552c; break;
+    case 0x5505: load16(r5, dp_addr(0xd154));                  mcu.pc = 0x5509; break;
+    case 0x5509: load16(r6, dp_addr(0xd156));                  mcu.pc = 0x550d; break;
+    case 0x550d: not16(r5);                                    mcu.pc = 0x550f; break;
+    case 0x550f: not16(r6);                                    mcu.pc = 0x5511; break;
+    case 0x5511: load16(r3, dp_addr(0xd150));                  mcu.pc = 0x5515; break;
+    case 0x5515: load16(r4, dp_addr(0xd152));                  mcu.pc = 0x5519; break;
+    case 0x5519: and16(r3, r5);                                mcu.pc = 0x551b; break;
+    case 0x551b: and16(r4, r6);                                mcu.pc = 0x551d; break;
+    case 0x551d: store16(dp_addr(0xd150), r3);                 mcu.pc = 0x5521; break;
+    case 0x5521: store16(dp_addr(0xd152), r4);                 mcu.pc = 0x5525; break;
+    default: break;
     }
-    load16(r5, dp_addr(0xd154));                               /* 5505 */
-    n++;
-    load16(r6, dp_addr(0xd156));                               /* 5509 */
-    n++;
-    not16(r5);                                                 /* 550d */
-    n++;
-    not16(r6);                                                 /* 550f */
-    n++;
-    load16(r3, dp_addr(0xd150));                               /* 5511 */
-    n++;
-    load16(r4, dp_addr(0xd152));                               /* 5515 */
-    n++;
-    and16(r3, r5);                                             /* 5519 */
-    n++;
-    and16(r4, r6);                                             /* 551b */
-    n++;
-    store16(dp_addr(0xd150), r3);                              /* 551d */
-    n++;
-    store16(dp_addr(0xd152), r4);                              /* 5521 */
-    n++;
-    mcu.pc = 0x5525u;
-    return n;
+    return 1;
 }
 
-/* flush_on 0x564a-0x565e -> 0x5662 (IML=7). */
-uint32_t routine_flush_on_a(void)
+/* flush_on 0x564a-0x565e -> 0x5662 (IML=7), per-PC. */
+uint32_t routine_flush_on_a_step(void)
 {
-    uint32_t n = 0;
     uint16_t &r5 = mcu.r[5];
     uint16_t &r6 = mcu.r[6];
 
-    load16(r5, dp_addr(0xd150));                               /* 564a */
-    n++;
-    load16(r6, dp_addr(0xd152));                               /* 564e */
-    n++;
-    or16_mem(r5, dp_addr(0xd154));                             /* 5652 */
-    n++;
-    or16_mem(r6, dp_addr(0xd156));                             /* 5656 */
-    n++;
-    store16(dp_addr(0xd150), r5);                              /* 565a */
-    n++;
-    store16(dp_addr(0xd152), r6);                              /* 565e */
-    n++;
-    mcu.pc = 0x5662u;
-    return n;
+    switch (mcu.pc)
+    {
+    case 0x564a: load16(r5, dp_addr(0xd150));                  mcu.pc = 0x564e; break;
+    case 0x564e: load16(r6, dp_addr(0xd152));                  mcu.pc = 0x5652; break;
+    case 0x5652: or16_mem(r5, dp_addr(0xd154));                mcu.pc = 0x5656; break;
+    case 0x5656: or16_mem(r6, dp_addr(0xd156));                mcu.pc = 0x565a; break;
+    case 0x565a: store16(dp_addr(0xd150), r5);                 mcu.pc = 0x565e; break;
+    case 0x565e: store16(dp_addr(0xd152), r6);                 mcu.pc = 0x5662; break;
+    default: break;
+    }
+    return 1;
 }
 
-/* flush_on 0x5668-0x5670 (after the 0x5662/64/66 PCM handlers). */
-uint32_t routine_flush_on_b(void)
+/* flush_on 0x5668-0x5670 (after the 0x5662/64/66 PCM handlers), per-PC. */
+uint32_t routine_flush_on_b_step(void)
 {
-    uint32_t n = 0;
-
-    clr16_mem(dp_addr(0xd154));                                /* 5668 */
-    n++;
-    clr16_mem(dp_addr(0xd156));                                /* 566c */
-    n++;
-    mcu.pc = MCU_PopStack();                                   /* 5670 */
-    n++;
-    return n;
+    switch (mcu.pc)
+    {
+    case 0x5668: clr16_mem(dp_addr(0xd154));                   mcu.pc = 0x566c; break;
+    case 0x566c: clr16_mem(dp_addr(0xd156));                   mcu.pc = 0x5670; break;
+    case 0x5670: mcu.pc = MCU_PopStack(); break;               /* rts */
+    default: break;
+    }
+    return 1;
 }
 
-/* ---- S8: param_write 0x5533-0x5625 --------------------------------------- */
+/* ---- S8: param_write 0x5533-0x5625 (per instruction) --------------------- */
 
 /* IML=7 (called between BSET_ORC 0x535e/0x53c7 and the exit BCLR_ANDC), no
- * observed internal interrupt, so one whole-routine block. All PCM register
- * traffic goes through MCU_Write/Read (device routing + -pcmtrace). dp is
- * cleared by each LDC as in the ROM; the block has no internal poll so the
- * host's boundary poll is the one stock would have taken. */
-uint32_t routine_param_write(void)
+ * observed internal interrupt. All PCM register traffic goes through
+ * MCU_Write/Read (device routing + -pcmtrace). dp is cleared by each LDC as
+ * in the ROM. Per-PC from round 6: the [229114164,229115004) span covered the
+ * -midiseq byte due at 229114868, whose deferred post let the SM consume it
+ * early (same class as the c212.565M materialize finding). */
+uint32_t routine_param_write_step(void)
 {
-    uint32_t n = 0;
     uint16_t &r3 = mcu.r[3];
     uint16_t &r4 = mcu.r[4];
     uint16_t &r5 = mcu.r[5];
     uint16_t &r6 = mcu.r[6];
 
-    load16(r3, ind_addr(0, (uint16_t)-2));                     /* 5533 slot */
-    n++;
-    clr8_mem(ind_addr(3, 0xce3f));                             /* 5536 */
-    n++;
-    clr8_mem(ind_addr(3, 0xd15c));                             /* 553a */
-    n++;
-    movs8(r3, 0x3e);                                           /* 553e select */
-    n++;
-    load16(r6, ind_addr(0, (uint16_t)-10));                    /* 5540 P-0x0a */
-    n++;
-    movs16(r6, 0x1e);                                          /* 5543 */
-    n++;
-    ldc_dp(0);                                                 /* 5545 */
-    n++;
-    movg_imm8(dp_addr(0xfe6c), (uint8_t)r3);                   /* 5548 */
-    n++;
-    store16(dp_addr(0xfe5e), r3);                              /* 554c */
-    n++;
-    ldc_dp(0);                                                 /* 5550 */
-    n++;
-    load8(r5, ind_addr(0, (uint16_t)-20));                     /* 5553 P-0x14 */
-    n++;
-    load16(r6, ind_addr(0, (uint16_t)-16));                    /* 5556 P-0x10 */
-    n++;
-    movs8(r5, 0x05);                                           /* 5559 */
-    n++;
-    movs16(r6, 0x06);                                          /* 555b */
-    n++;
-    ldc_dp(0);                                                 /* 555d */
-    n++;
-    movg_imm8(dp_addr(0xfe6d), (uint8_t)r5);                   /* 5560 */
-    n++;
-    store16(dp_addr(0xfe60), r6);                              /* 5564 */
-    n++;
-    ldc_dp(0);                                                 /* 5568 */
-    n++;
-    load8(r5, ind_addr(0, (uint16_t)-18));                     /* 556b P-0x12 */
-    n++;
-    load16(r6, ind_addr(0, (uint16_t)-12));                    /* 556e P-0x0c */
-    n++;
-    movs8(r5, 0x09);                                           /* 5571 */
-    n++;
-    movs16(r6, 0x0a);                                          /* 5573 */
-    n++;
-    ldc_dp(0);                                                 /* 5575 */
-    n++;
-    movg_imm8(dp_addr(0xfe6e), (uint8_t)r5);                   /* 5578 */
-    n++;
-    store16(dp_addr(0xfe62), r6);                              /* 557c */
-    n++;
-    ldc_dp(0);                                                 /* 5580 */
-    n++;
-    load8(r5, ind_addr(0, (uint16_t)-19));                     /* 5583 P-0x13 */
-    n++;
-    load16(r6, ind_addr(0, (uint16_t)-14));                    /* 5586 P-0x0e */
-    n++;
-    movs8(r5, 0x0d);                                           /* 5589 */
-    n++;
-    movs16(r6, 0x0e);                                          /* 558b */
-    n++;
-    ldc_dp(0);                                                 /* 558d */
-    n++;
-    movg_imm8(dp_addr(0xfe6f), (uint8_t)r5);                   /* 5590 */
-    n++;
-    store16(dp_addr(0xfe64), r6);                              /* 5594 */
-    n++;
-    ldc_dp(0);                                                 /* 5598 */
-    n++;
-    load16(r6, ind_addr(0, 52));                               /* 559b P+0x34 */
-    n++;
-    movs16(r6, 0x12);                                          /* 559e */
-    n++;
-    ldc_dp(0);                                                 /* 55a0 */
-    n++;
-    store16(dp_addr(0xfe66), r6);                              /* 55a3 */
-    n++;
-    ldc_dp(0);                                                 /* 55a7 */
-    n++;
-    load16(r6, ind_addr(0, 58));                               /* 55aa P+0x3a */
-    n++;
-    movs16(r6, 0x14);                                          /* 55ad */
-    n++;
-    ldc_dp(0);                                                 /* 55af */
-    n++;
-    store16(dp_addr(0xfe68), r6);                              /* 55b2 */
-    n++;
-    ldc_dp(0);                                                 /* 55b6 */
-    n++;
-    load8(r6, ind_addr(0, 104));                               /* 55b9 P+0x68 */
-    n++;
-    swap16(r6);                                                /* 55bc */
-    n++;
-    load8(r6, ind_addr(0, 102));                               /* 55be P+0x66 */
-    n++;
-    movs16(r6, 0x1c);                                          /* 55c1 */
-    n++;
-    load16(r6, ind_addr(0, (uint16_t)-24));                    /* 55c3 P-0x18 */
-    n++;
-    movs16(r6, 0x1a);                                          /* 55c6 */
-    n++;
-    load16(r6, ind_addr(0, 26));                               /* 55c8 P+0x1a */
-    n++;
-    movs16(r6, 0x16);                                          /* 55cb */
-    n++;
-    btsti8_mem(ind_addr(0, (uint16_t)-59), 7);                 /* 55cd */
-    n++;
-    n++;                                                       /* 55d0 BEQ */
-    if (mcu.sr & STATUS_Z)
+    switch (mcu.pc)
     {
-        /* 5608: alternate tail (cf90 bit7 clear), unobserved in captured runs. */
-        load16(r5, ind_addr(0, 30));                           /* 5608 */
-        n++;
-        load16(r6, ind_addr(0, 72));                           /* 560b */
-        n++;
-        movs16(r5, 0x18);                                      /* 560e */
-        n++;
-        movs16(r6, 0x10);                                      /* 5610 */
-        n++;
-        ldc_dp(0);                                             /* 5612 */
-        n++;
-        store16(dp_addr(0xfe6a), r6);                          /* 5615 */
-        n++;
-        ldc_dp(0);                                             /* 5619 */
-        n++;
-        load16(r6, ind_addr(0, 6));                            /* 561c */
-        n++;
-        store16(ind_addr(0, 0), r6);                           /* 561f */
-        n++;
-        clr16_mem(ind_addr(0, 6));                             /* 5622 */
-        n++;
-        mcu.pc = MCU_PopStack();                               /* 5625 */
-        n++;
-        return n;
+    case 0x5533: load16(r3, ind_addr(0, (uint16_t)-2));        mcu.pc = 0x5536; break;
+    case 0x5536: clr8_mem(ind_addr(3, 0xce3f));                mcu.pc = 0x553a; break;
+    case 0x553a: clr8_mem(ind_addr(3, 0xd15c));                mcu.pc = 0x553e; break;
+    case 0x553e: movs8(r3, 0x3e);                              mcu.pc = 0x5540; break;
+    case 0x5540: load16(r6, ind_addr(0, (uint16_t)-10));       mcu.pc = 0x5543; break;
+    case 0x5543: movs16(r6, 0x1e);                             mcu.pc = 0x5545; break;
+    case 0x5545: ldc_dp(0);                                    mcu.pc = 0x5548; break;
+    case 0x5548: movg_imm8(dp_addr(0xfe6c), (uint8_t)r3);      mcu.pc = 0x554c; break;
+    case 0x554c: store16(dp_addr(0xfe5e), r3);                 mcu.pc = 0x5550; break;
+    case 0x5550: ldc_dp(0);                                    mcu.pc = 0x5553; break;
+    case 0x5553: load8(r5, ind_addr(0, (uint16_t)-20));        mcu.pc = 0x5556; break;
+    case 0x5556: load16(r6, ind_addr(0, (uint16_t)-16));       mcu.pc = 0x5559; break;
+    case 0x5559: movs8(r5, 0x05);                              mcu.pc = 0x555b; break;
+    case 0x555b: movs16(r6, 0x06);                             mcu.pc = 0x555d; break;
+    case 0x555d: ldc_dp(0);                                    mcu.pc = 0x5560; break;
+    case 0x5560: movg_imm8(dp_addr(0xfe6d), (uint8_t)r5);      mcu.pc = 0x5564; break;
+    case 0x5564: store16(dp_addr(0xfe60), r6);                 mcu.pc = 0x5568; break;
+    case 0x5568: ldc_dp(0);                                    mcu.pc = 0x556b; break;
+    case 0x556b: load8(r5, ind_addr(0, (uint16_t)-18));        mcu.pc = 0x556e; break;
+    case 0x556e: load16(r6, ind_addr(0, (uint16_t)-12));       mcu.pc = 0x5571; break;
+    case 0x5571: movs8(r5, 0x09);                              mcu.pc = 0x5573; break;
+    case 0x5573: movs16(r6, 0x0a);                             mcu.pc = 0x5575; break;
+    case 0x5575: ldc_dp(0);                                    mcu.pc = 0x5578; break;
+    case 0x5578: movg_imm8(dp_addr(0xfe6e), (uint8_t)r5);      mcu.pc = 0x557c; break;
+    case 0x557c: store16(dp_addr(0xfe62), r6);                 mcu.pc = 0x5580; break;
+    case 0x5580: ldc_dp(0);                                    mcu.pc = 0x5583; break;
+    case 0x5583: load8(r5, ind_addr(0, (uint16_t)-19));        mcu.pc = 0x5586; break;
+    case 0x5586: load16(r6, ind_addr(0, (uint16_t)-14));       mcu.pc = 0x5589; break;
+    case 0x5589: movs8(r5, 0x0d);                              mcu.pc = 0x558b; break;
+    case 0x558b: movs16(r6, 0x0e);                             mcu.pc = 0x558d; break;
+    case 0x558d: ldc_dp(0);                                    mcu.pc = 0x5590; break;
+    case 0x5590: movg_imm8(dp_addr(0xfe6f), (uint8_t)r5);      mcu.pc = 0x5594; break;
+    case 0x5594: store16(dp_addr(0xfe64), r6);                 mcu.pc = 0x5598; break;
+    case 0x5598: ldc_dp(0);                                    mcu.pc = 0x559b; break;
+    case 0x559b: load16(r6, ind_addr(0, 52));                  mcu.pc = 0x559e; break;
+    case 0x559e: movs16(r6, 0x12);                             mcu.pc = 0x55a0; break;
+    case 0x55a0: ldc_dp(0);                                    mcu.pc = 0x55a3; break;
+    case 0x55a3: store16(dp_addr(0xfe66), r6);                 mcu.pc = 0x55a7; break;
+    case 0x55a7: ldc_dp(0);                                    mcu.pc = 0x55aa; break;
+    case 0x55aa: load16(r6, ind_addr(0, 58));                  mcu.pc = 0x55ad; break;
+    case 0x55ad: movs16(r6, 0x14);                             mcu.pc = 0x55af; break;
+    case 0x55af: ldc_dp(0);                                    mcu.pc = 0x55b2; break;
+    case 0x55b2: store16(dp_addr(0xfe68), r6);                 mcu.pc = 0x55b6; break;
+    case 0x55b6: ldc_dp(0);                                    mcu.pc = 0x55b9; break;
+    case 0x55b9: load8(r6, ind_addr(0, 104));                  mcu.pc = 0x55bc; break;
+    case 0x55bc: swap16(r6);                                   mcu.pc = 0x55be; break;
+    case 0x55be: load8(r6, ind_addr(0, 102));                  mcu.pc = 0x55c1; break;
+    case 0x55c1: movs16(r6, 0x1c);                             mcu.pc = 0x55c3; break;
+    case 0x55c3: load16(r6, ind_addr(0, (uint16_t)-24));       mcu.pc = 0x55c6; break;
+    case 0x55c6: movs16(r6, 0x1a);                             mcu.pc = 0x55c8; break;
+    case 0x55c8: load16(r6, ind_addr(0, 26));                  mcu.pc = 0x55cb; break;
+    case 0x55cb: movs16(r6, 0x16);                             mcu.pc = 0x55cd; break;
+    case 0x55cd: btsti8_mem(ind_addr(0, (uint16_t)-59), 7);    mcu.pc = 0x55d0; break;
+    case 0x55d0: mcu.pc = (mcu.sr & STATUS_Z) ? 0x5608 : 0x55d2; break;
+    case 0x55d2: tst16_mem(ind_addr(0, 14));                   mcu.pc = 0x55d5; break;
+    case 0x55d5: mcu.pc = (mcu.sr & STATUS_Z) ? 0x55e2 : 0x55d7; break;
+    case 0x55d7: movi16(r4, 0x0002);                           mcu.pc = 0x55da; break;
+    case 0x55da: load16(r5, ind_addr(0, 30));                  mcu.pc = 0x55dd; break;
+    case 0x55dd: load16(r6, ind_addr(0, 72));                  mcu.pc = 0x55e0; break;
+    case 0x55e0: mcu.pc = 0x55ed; break;                       /* BRA 11 -> 55ed */
+    case 0x55e2: movi16(r4, 0x0000);                           mcu.pc = 0x55e5; break;
+    case 0x55e5: movi16(r5, 0x00b5);                           mcu.pc = 0x55e8; break;
+    case 0x55e8: clr16(r6);                                    mcu.pc = 0x55ea; break;
+    case 0x55ea: clr16_mem(ind_addr(0, 8));                    mcu.pc = 0x55ed; break;
+    case 0x55ed: store16(ind_addr(0, 0), r4);                  mcu.pc = 0x55f0; break;
+    case 0x55f0: store16(ind_addr(0, 2), r4);                  mcu.pc = 0x55f3; break;
+    case 0x55f3: store16(ind_addr(0, 4), r4);                  mcu.pc = 0x55f6; break;
+    case 0x55f6: movs16(r5, 0x18);                             mcu.pc = 0x55f8; break;
+    case 0x55f8: store16(ind_addr(0, 30), r5);                 mcu.pc = 0x55fb; break;
+    case 0x55fb: movs16(r6, 0x10);                             mcu.pc = 0x55fd; break;
+    case 0x55fd: ldc_dp(0);                                    mcu.pc = 0x5600; break;
+    case 0x5600: store16(dp_addr(0xfe6a), r6);                 mcu.pc = 0x5604; break;
+    case 0x5604: ldc_dp(0);                                    mcu.pc = 0x5607; break;
+    case 0x5607: mcu.pc = MCU_PopStack(); break;               /* rts */
+
+    /* Alternate tail (cf90 bit7 clear), unobserved in the captured runs. */
+    case 0x5608: load16(r5, ind_addr(0, 30));                  mcu.pc = 0x560b; break;
+    case 0x560b: load16(r6, ind_addr(0, 72));                  mcu.pc = 0x560e; break;
+    case 0x560e: movs16(r5, 0x18);                             mcu.pc = 0x5610; break;
+    case 0x5610: movs16(r6, 0x10);                             mcu.pc = 0x5612; break;
+    case 0x5612: ldc_dp(0);                                    mcu.pc = 0x5615; break;
+    case 0x5615: store16(dp_addr(0xfe6a), r6);                 mcu.pc = 0x5619; break;
+    case 0x5619: ldc_dp(0);                                    mcu.pc = 0x561c; break;
+    case 0x561c: load16(r6, ind_addr(0, 6));                   mcu.pc = 0x561f; break;
+    case 0x561f: store16(ind_addr(0, 0), r6);                  mcu.pc = 0x5622; break;
+    case 0x5622: clr16_mem(ind_addr(0, 6));                    mcu.pc = 0x5625; break;
+    case 0x5625: mcu.pc = MCU_PopStack(); break;               /* rts */
+    default: break;
     }
-    tst16_mem(ind_addr(0, 14));                                /* 55d2 */
-    n++;
-    n++;                                                       /* 55d5 BEQ */
-    if (mcu.sr & STATUS_Z)
-    {
-        movi16(r4, 0x0000);                                    /* 55e2 */
-        n++;
-        movi16(r5, 0x00b5);                                    /* 55e5 */
-        n++;
-        clr16(r6);                                             /* 55e8 */
-        n++;
-        clr16_mem(ind_addr(0, 8));                             /* 55ea */
-        n++;
-    }
-    else
-    {
-        movi16(r4, 0x0002);                                    /* 55d7 */
-        n++;
-        load16(r5, ind_addr(0, 30));                           /* 55da */
-        n++;
-        load16(r6, ind_addr(0, 72));                           /* 55dd */
-        n++;
-        n++;                                                   /* 55e0 BRA -> 55ed */
-    }
-    store16(ind_addr(0, 0), r4);                               /* 55ed */
-    n++;
-    store16(ind_addr(0, 2), r4);                               /* 55f0 */
-    n++;
-    store16(ind_addr(0, 4), r4);                               /* 55f3 */
-    n++;
-    movs16(r5, 0x18);                                          /* 55f6 */
-    n++;
-    store16(ind_addr(0, 30), r5);                              /* 55f8 */
-    n++;
-    movs16(r6, 0x10);                                          /* 55fb */
-    n++;
-    ldc_dp(0);                                                 /* 55fd */
-    n++;
-    store16(dp_addr(0xfe6a), r6);                              /* 5600 */
-    n++;
-    ldc_dp(0);                                                 /* 5604 */
-    n++;
-    mcu.pc = MCU_PopStack();                                   /* 5607 */
-    n++;
-    return n;
+    return 1;
 }
 
 /* loop_write 0x5626-0x5649 (IML=7): waits for PCM status 0x1e bit5 before
@@ -1468,7 +1323,464 @@ uint32_t routine_pcm_play_step(void)
     return 1;
 }
 
+/* ---- S6: coeff_calc 0x5998-0x5d6d ---------------------------------------- */
+
+/* IML=0 with the stock run interrupted at ~50 different instruction labels
+ * (41 unique resume PCs in the [225M,296M) trace alone), so the only exact
+ * form is one entry per instruction (each returns 1): the host polls, runs
+ * TIMER_Clock and traces between every instruction exactly like stock.
+ *
+ * The fixed-point maths is the ROM's, transcribed step by step as named
+ * operations (mulxu8/mulxu16_imm, the table sum, the clamp and the shift
+ * scaling); no algebraic rewriting or constant folding is applied. The routine
+ * reads its parameters from the tone record (r2 = word[(dp,0xd17e)]) and the
+ * per-slot coefficient base byte (dp,0xd180), then writes the nine DSP
+ * coefficients P+0x86..90/92/94/96 and P-80/-114. */
+
+void mulxu8_reg(uint16_t mult, uint16_t &acc)
+{
+    uint32_t product = (uint32_t)(mult & 0xffu) * (uint32_t)(acc & 0xffu);
+    acc = (uint16_t)product;
+    MCU_SetStatus((product & 0x8000u) != 0, STATUS_N);
+    MCU_SetStatus(product == 0, STATUS_Z);
+    MCU_SetStatus(0, STATUS_V);
+    MCU_SetStatus(0, STATUS_C);
+}
+
+void mulxu8_mem(uint32_t addr, uint16_t &acc)
+{
+    mulxu8_reg(MCU_Read(addr), acc);
+}
+
+void mulxu16_imm(uint16_t imm, uint16_t &hi, uint16_t &lo)
+{
+    uint32_t product = (uint32_t)imm * (uint32_t)hi;
+    hi = (uint16_t)(product >> 16);
+    lo = (uint16_t)product;
+    MCU_SetStatus((product & 0x80000000u) != 0, STATUS_N);
+    MCU_SetStatus(product == 0, STATUS_Z);
+    MCU_SetStatus(0, STATUS_V);
+    MCU_SetStatus(0, STATUS_C);
+}
+
+void add16_mem(uint16_t &reg, uint32_t addr)
+{
+    reg = (uint16_t)MCU_ADD_Common(reg, MCU_Read16(addr), 0, 1);
+}
+
+uint32_t routine_coeff_calc_step(void)
+{
+    uint16_t &r2 = mcu.r[2];
+    uint16_t &r3 = mcu.r[3];
+    uint16_t &r4 = mcu.r[4];
+    uint16_t &r5 = mcu.r[5];
+    uint16_t &r6 = mcu.r[6];
+
+    switch (mcu.pc)
+    {
+    /* 5998..59ba prologue: tone pointer -> (dp,0xd17e), coeff base -> (dp,0xd180). */
+    case 0x5998: clr16(r6);                                    mcu.pc = 0x599a; break;
+    case 0x599a: load8(r6, ind_addr(1, 0xce78));               mcu.pc = 0x599e; break;
+    case 0x599e: move16(r3, r6);                               mcu.pc = 0x59a0; break;
+    case 0x59a0: add16(r3, r3);                                mcu.pc = 0x59a2; break;
+    case 0x59a2: load16(r2, ind_addr(3, 0x7218));              mcu.pc = 0x59a6; break;
+    case 0x59a6: store16(dp_addr(0xd17e), r2);                 mcu.pc = 0x59aa; break;
+    case 0x59aa: move8(r4, 0x80);                              mcu.pc = 0x59ac; break;
+    case 0x59ac: mulxu8_reg(r6, r4);                           mcu.pc = 0x59ae; break;
+    case 0x59ae: clr16(r3);                                    mcu.pc = 0x59b0; break;
+    case 0x59b0: load8(r3, ind_addr(1, 0xd134));               mcu.pc = 0x59b4; break;
+    case 0x59b4: add16(r3, r4);                                mcu.pc = 0x59b6; break;
+    case 0x59b6: load8(r5, ind_addr(3, 0x9740));               mcu.pc = 0x59ba; break;
+    case 0x59ba: store8(dp_addr(0xd180), (uint8_t)r5);         mcu.pc = 0x59be; break;
+
+    /* group P+0x86: tone[76], tables 9060/91c0/9320/9480/95e0, clamp 0xbe8,
+     * <<3, *0xfbf8 (word). */
+    case 0x59be: load8(r4, ind_addr(2, 76));                   mcu.pc = 0x59c1; break;
+    case 0x59c1: sub8_imm(r4, 0x40);                           mcu.pc = 0x59c4; break;
+    case 0x59c4: mcu.pc = (mcu.sr & STATUS_C) ? 0x59c6 : 0x59cf; break;
+    case 0x59c6: neg8(r4);                                     mcu.pc = 0x59c8; break;
+    case 0x59c8: mulxu8_reg(r5, r4);                           mcu.pc = 0x59ca; break;
+    case 0x59ca: neg16(r4);                                    mcu.pc = 0x59cc; break;
+    case 0x59cc: mcu.pc = 0x59d1; break;
+    case 0x59ce: mcu.pc = MCU_PopStack(); break;
+    case 0x59cf: mulxu8_reg(r5, r4);                           mcu.pc = 0x59d1; break;
+    case 0x59d1: move16(r3, r6);                               mcu.pc = 0x59d3; break;
+    case 0x59d3: add16(r3, r3);                                mcu.pc = 0x59d5; break;
+    case 0x59d5: add16_mem(r4, ind_addr(3, 0x9060));           mcu.pc = 0x59d9; break;
+    case 0x59d9: add16_mem(r4, ind_addr(3, 0x91c0));           mcu.pc = 0x59dd; break;
+    case 0x59dd: add16_mem(r4, ind_addr(3, 0x9320));           mcu.pc = 0x59e1; break;
+    case 0x59e1: add16_mem(r4, ind_addr(3, 0x9480));           mcu.pc = 0x59e5; break;
+    case 0x59e5: add16_mem(r4, ind_addr(3, 0x95e0));           mcu.pc = 0x59e9; break;
+    case 0x59e9: mcu.pc = (mcu.sr & STATUS_N) ? 0x59eb : 0x5a03; break;
+    case 0x59eb: neg16(r4);                                    mcu.pc = 0x59ed; break;
+    case 0x59ed: cmp16(r4, 0x0be8);                            mcu.pc = 0x59f0; break;
+    case 0x59f0: mcu.pc = (mcu.sr & STATUS_C) ? 0x59f5 : 0x59f2; break;
+    case 0x59f2: movi16(r4, 0x0be8);                           mcu.pc = 0x59f5; break;
+    case 0x59f5: add16(r4, r4);                                mcu.pc = 0x59f7; break;
+    case 0x59f7: add16(r4, r4);                                mcu.pc = 0x59f9; break;
+    case 0x59f9: add16(r4, r4);                                mcu.pc = 0x59fb; break;
+    case 0x59fb: mulxu16_imm(0xfbf8, r4, r5);                  mcu.pc = 0x59ff; break;
+    case 0x59ff: neg16(r4);                                    mcu.pc = 0x5a01; break;
+    case 0x5a01: mcu.pc = 0x5a15; break;
+    case 0x5a03: cmp16(r4, 0x0be8);                            mcu.pc = 0x5a06; break;
+    case 0x5a06: mcu.pc = (mcu.sr & STATUS_C) ? 0x5a0b : 0x5a08; break;
+    case 0x5a08: movi16(r4, 0x0be8);                           mcu.pc = 0x5a0b; break;
+    case 0x5a0b: add16(r4, r4);                                mcu.pc = 0x5a0d; break;
+    case 0x5a0d: add16(r4, r4);                                mcu.pc = 0x5a0f; break;
+    case 0x5a0f: add16(r4, r4);                                mcu.pc = 0x5a11; break;
+    case 0x5a11: mulxu16_imm(0xfbf8, r4, r5);                  mcu.pc = 0x5a15; break;
+    case 0x5a15: store16(ind_addr(0, 0x86), r4);               mcu.pc = 0x5a19; break;
+
+    /* group P+0x8a: tone[78], tables 90a0/9200/9360/94c0/9620, clamp 0xfa0,
+     * >>1, <<4, *0x820d. */
+    case 0x5a19: load16(r2, dp_addr(0xd17e));                  mcu.pc = 0x5a1d; break;
+    case 0x5a1d: load8(r4, ind_addr(2, 78));                   mcu.pc = 0x5a20; break;
+    case 0x5a20: sub8_imm(r4, 0x40);                           mcu.pc = 0x5a23; break;
+    case 0x5a23: mcu.pc = (mcu.sr & STATUS_C) ? 0x5a25 : 0x5a31; break;
+    case 0x5a25: neg8(r4);                                     mcu.pc = 0x5a27; break;
+    case 0x5a27: mulxu8_mem(dp_addr(0xd180), r4);              mcu.pc = 0x5a2b; break;
+    case 0x5a2b: shlr16(r4);                                   mcu.pc = 0x5a2d; break;
+    case 0x5a2d: neg16(r4);                                    mcu.pc = 0x5a2f; break;
+    case 0x5a2f: mcu.pc = 0x5a37; break;
+    case 0x5a31: mulxu8_mem(dp_addr(0xd180), r4);              mcu.pc = 0x5a35; break;
+    case 0x5a35: shlr16(r4);                                   mcu.pc = 0x5a37; break;
+    case 0x5a37: add16_mem(r4, ind_addr(3, 0x90a0));           mcu.pc = 0x5a3b; break;
+    case 0x5a3b: add16_mem(r4, ind_addr(3, 0x9200));           mcu.pc = 0x5a3f; break;
+    case 0x5a3f: add16_mem(r4, ind_addr(3, 0x9360));           mcu.pc = 0x5a43; break;
+    case 0x5a43: add16_mem(r4, ind_addr(3, 0x94c0));           mcu.pc = 0x5a47; break;
+    case 0x5a47: add16_mem(r4, ind_addr(3, 0x9620));           mcu.pc = 0x5a4b; break;
+    case 0x5a4b: mcu.pc = (mcu.sr & STATUS_N) ? 0x5a4d : 0x5a67; break;
+    case 0x5a4d: neg16(r4);                                    mcu.pc = 0x5a4f; break;
+    case 0x5a4f: cmp16(r4, 0x0fa0);                            mcu.pc = 0x5a52; break;
+    case 0x5a52: mcu.pc = (mcu.sr & STATUS_C) ? 0x5a57 : 0x5a54; break;
+    case 0x5a54: movi16(r4, 0x0fa0);                           mcu.pc = 0x5a57; break;
+    case 0x5a57: add16(r4, r4);                                mcu.pc = 0x5a59; break;
+    case 0x5a59: add16(r4, r4);                                mcu.pc = 0x5a5b; break;
+    case 0x5a5b: add16(r4, r4);                                mcu.pc = 0x5a5d; break;
+    case 0x5a5d: add16(r4, r4);                                mcu.pc = 0x5a5f; break;
+    case 0x5a5f: mulxu16_imm(0x820d, r4, r5);                  mcu.pc = 0x5a63; break;
+    case 0x5a63: neg16(r4);                                    mcu.pc = 0x5a65; break;
+    case 0x5a65: mcu.pc = 0x5a7b; break;
+    case 0x5a67: cmp16(r4, 0x0fa0);                            mcu.pc = 0x5a6a; break;
+    case 0x5a6a: mcu.pc = (mcu.sr & STATUS_C) ? 0x5a6f : 0x5a6c; break;
+    case 0x5a6c: movi16(r4, 0x0fa0);                           mcu.pc = 0x5a6f; break;
+    case 0x5a6f: add16(r4, r4);                                mcu.pc = 0x5a71; break;
+    case 0x5a71: add16(r4, r4);                                mcu.pc = 0x5a73; break;
+    case 0x5a73: add16(r4, r4);                                mcu.pc = 0x5a75; break;
+    case 0x5a75: add16(r4, r4);                                mcu.pc = 0x5a77; break;
+    case 0x5a77: mulxu16_imm(0x820d, r4, r5);                  mcu.pc = 0x5a7b; break;
+    case 0x5a7b: store16(ind_addr(0, 0x8a), r4);               mcu.pc = 0x5a7f; break;
+
+    /* group P+0x88: tone[77], tables 9080/91e0/9340/94a0/9600, clamp 0xfa0,
+     * >>1, <<3, *0xc49c. */
+    case 0x5a7f: load16(r2, dp_addr(0xd17e));                  mcu.pc = 0x5a83; break;
+    case 0x5a83: load8(r4, ind_addr(2, 77));                   mcu.pc = 0x5a86; break;
+    case 0x5a86: sub8_imm(r4, 0x40);                           mcu.pc = 0x5a89; break;
+    case 0x5a89: mcu.pc = (mcu.sr & STATUS_C) ? 0x5a8b : 0x5a97; break;
+    case 0x5a8b: neg8(r4);                                     mcu.pc = 0x5a8d; break;
+    case 0x5a8d: mulxu8_mem(dp_addr(0xd180), r4);              mcu.pc = 0x5a91; break;
+    case 0x5a91: shlr16(r4);                                   mcu.pc = 0x5a93; break;
+    case 0x5a93: neg16(r4);                                    mcu.pc = 0x5a95; break;
+    case 0x5a95: mcu.pc = 0x5a9d; break;
+    case 0x5a97: mulxu8_mem(dp_addr(0xd180), r4);              mcu.pc = 0x5a9b; break;
+    case 0x5a9b: shlr16(r4);                                   mcu.pc = 0x5a9d; break;
+    case 0x5a9d: add16_mem(r4, ind_addr(3, 0x9080));           mcu.pc = 0x5aa1; break;
+    case 0x5aa1: add16_mem(r4, ind_addr(3, 0x91e0));           mcu.pc = 0x5aa5; break;
+    case 0x5aa5: add16_mem(r4, ind_addr(3, 0x9340));           mcu.pc = 0x5aa9; break;
+    case 0x5aa9: add16_mem(r4, ind_addr(3, 0x94a0));           mcu.pc = 0x5aad; break;
+    case 0x5aad: add16_mem(r4, ind_addr(3, 0x9600));           mcu.pc = 0x5ab1; break;
+    case 0x5ab1: mcu.pc = (mcu.sr & STATUS_N) ? 0x5ab3 : 0x5acb; break;
+    case 0x5ab3: neg16(r4);                                    mcu.pc = 0x5ab5; break;
+    case 0x5ab5: cmp16(r4, 0x0fa0);                            mcu.pc = 0x5ab8; break;
+    case 0x5ab8: mcu.pc = (mcu.sr & STATUS_C) ? 0x5abd : 0x5aba; break;
+    case 0x5aba: movi16(r4, 0x0fa0);                           mcu.pc = 0x5abd; break;
+    case 0x5abd: add16(r4, r4);                                mcu.pc = 0x5abf; break;
+    case 0x5abf: add16(r4, r4);                                mcu.pc = 0x5ac1; break;
+    case 0x5ac1: add16(r4, r4);                                mcu.pc = 0x5ac3; break;
+    case 0x5ac3: mulxu16_imm(0xc49c, r4, r5);                  mcu.pc = 0x5ac7; break;
+    case 0x5ac7: neg16(r4);                                    mcu.pc = 0x5ac9; break;
+    case 0x5ac9: mcu.pc = 0x5add; break;
+    case 0x5acb: cmp16(r4, 0x0fa0);                            mcu.pc = 0x5ace; break;
+    case 0x5ace: mcu.pc = (mcu.sr & STATUS_C) ? 0x5ad3 : 0x5ad0; break;
+    case 0x5ad0: movi16(r4, 0x0fa0);                           mcu.pc = 0x5ad3; break;
+    case 0x5ad3: add16(r4, r4);                                mcu.pc = 0x5ad5; break;
+    case 0x5ad5: add16(r4, r4);                                mcu.pc = 0x5ad7; break;
+    case 0x5ad7: add16(r4, r4);                                mcu.pc = 0x5ad9; break;
+    case 0x5ad9: mulxu16_imm(0xc49c, r4, r5);                  mcu.pc = 0x5add; break;
+    case 0x5add: store16(ind_addr(0, 0x88), r4);               mcu.pc = 0x5ae1; break;
+
+    /* group P-80: tone[84], tables 9140/92a0/9400/9560/96c0, clamp 0xfa0,
+     * >>1, <<1, *0xa7c7. */
+    case 0x5ae1: load16(r2, dp_addr(0xd17e));                  mcu.pc = 0x5ae5; break;
+    case 0x5ae5: load8(r4, ind_addr(2, 84));                   mcu.pc = 0x5ae8; break;
+    case 0x5ae8: sub8_imm(r4, 0x40);                           mcu.pc = 0x5aeb; break;
+    case 0x5aeb: mcu.pc = (mcu.sr & STATUS_C) ? 0x5aed : 0x5af9; break;
+    case 0x5aed: neg8(r4);                                     mcu.pc = 0x5aef; break;
+    case 0x5aef: mulxu8_mem(dp_addr(0xd180), r4);              mcu.pc = 0x5af3; break;
+    case 0x5af3: shlr16(r4);                                   mcu.pc = 0x5af5; break;
+    case 0x5af5: neg16(r4);                                    mcu.pc = 0x5af7; break;
+    case 0x5af7: mcu.pc = 0x5aff; break;
+    case 0x5af9: mulxu8_mem(dp_addr(0xd180), r4);              mcu.pc = 0x5afd; break;
+    case 0x5afd: shlr16(r4);                                   mcu.pc = 0x5aff; break;
+    case 0x5aff: add16_mem(r4, ind_addr(3, 0x9140));           mcu.pc = 0x5b03; break;
+    case 0x5b03: add16_mem(r4, ind_addr(3, 0x92a0));           mcu.pc = 0x5b07; break;
+    case 0x5b07: add16_mem(r4, ind_addr(3, 0x9400));           mcu.pc = 0x5b0b; break;
+    case 0x5b0b: add16_mem(r4, ind_addr(3, 0x9560));           mcu.pc = 0x5b0f; break;
+    case 0x5b0f: add16_mem(r4, ind_addr(3, 0x96c0));           mcu.pc = 0x5b13; break;
+    case 0x5b13: mcu.pc = (mcu.sr & STATUS_N) ? 0x5b15 : 0x5b29; break;
+    case 0x5b15: neg16(r4);                                    mcu.pc = 0x5b17; break;
+    case 0x5b17: cmp16(r4, 0x0fa0);                            mcu.pc = 0x5b1a; break;
+    case 0x5b1a: mcu.pc = (mcu.sr & STATUS_C) ? 0x5b1f : 0x5b1c; break;
+    case 0x5b1c: movi16(r4, 0x0fa0);                           mcu.pc = 0x5b1f; break;
+    case 0x5b1f: add16(r4, r4);                                mcu.pc = 0x5b21; break;
+    case 0x5b21: mulxu16_imm(0xa7c7, r4, r5);                  mcu.pc = 0x5b25; break;
+    case 0x5b25: neg16(r4);                                    mcu.pc = 0x5b27; break;
+    case 0x5b27: mcu.pc = 0x5b37; break;
+    case 0x5b29: cmp16(r4, 0x0fa0);                            mcu.pc = 0x5b2c; break;
+    case 0x5b2c: mcu.pc = (mcu.sr & STATUS_C) ? 0x5b31 : 0x5b2e; break;
+    case 0x5b2e: movi16(r4, 0x0fa0);                           mcu.pc = 0x5b31; break;
+    case 0x5b31: add16(r4, r4);                                mcu.pc = 0x5b33; break;
+    case 0x5b33: mulxu16_imm(0xa7c7, r4, r5);                  mcu.pc = 0x5b37; break;
+    case 0x5b37: store16(ind_addr(0, (uint16_t)-80), r4);      mcu.pc = 0x5b3a; break;
+
+    /* group P-114: tone[80], tables 90c0/9220/9380/94e0/9640, clamp 0xfa0,
+     * >>1, <<1, *0xa7c7. */
+    case 0x5b3a: load16(r2, dp_addr(0xd17e));                  mcu.pc = 0x5b3e; break;
+    case 0x5b3e: load8(r4, ind_addr(2, 80));                   mcu.pc = 0x5b41; break;
+    case 0x5b41: sub8_imm(r4, 0x40);                           mcu.pc = 0x5b44; break;
+    case 0x5b44: mcu.pc = (mcu.sr & STATUS_C) ? 0x5b46 : 0x5b52; break;
+    case 0x5b46: neg8(r4);                                     mcu.pc = 0x5b48; break;
+    case 0x5b48: mulxu8_mem(dp_addr(0xd180), r4);              mcu.pc = 0x5b4c; break;
+    case 0x5b4c: shlr16(r4);                                   mcu.pc = 0x5b4e; break;
+    case 0x5b4e: neg16(r4);                                    mcu.pc = 0x5b50; break;
+    case 0x5b50: mcu.pc = 0x5b58; break;
+    case 0x5b52: mulxu8_mem(dp_addr(0xd180), r4);              mcu.pc = 0x5b56; break;
+    case 0x5b56: shlr16(r4);                                   mcu.pc = 0x5b58; break;
+    case 0x5b58: add16_mem(r4, ind_addr(3, 0x90c0));           mcu.pc = 0x5b5c; break;
+    case 0x5b5c: add16_mem(r4, ind_addr(3, 0x9220));           mcu.pc = 0x5b60; break;
+    case 0x5b60: add16_mem(r4, ind_addr(3, 0x9380));           mcu.pc = 0x5b64; break;
+    case 0x5b64: add16_mem(r4, ind_addr(3, 0x94e0));           mcu.pc = 0x5b68; break;
+    case 0x5b68: add16_mem(r4, ind_addr(3, 0x9640));           mcu.pc = 0x5b6c; break;
+    case 0x5b6c: mcu.pc = (mcu.sr & STATUS_N) ? 0x5b6e : 0x5b82; break;
+    case 0x5b6e: neg16(r4);                                    mcu.pc = 0x5b70; break;
+    case 0x5b70: cmp16(r4, 0x0fa0);                            mcu.pc = 0x5b73; break;
+    case 0x5b73: mcu.pc = (mcu.sr & STATUS_C) ? 0x5b78 : 0x5b75; break;
+    case 0x5b75: movi16(r4, 0x0fa0);                           mcu.pc = 0x5b78; break;
+    case 0x5b78: add16(r4, r4);                                mcu.pc = 0x5b7a; break;
+    case 0x5b7a: mulxu16_imm(0xa7c7, r4, r5);                  mcu.pc = 0x5b7e; break;
+    case 0x5b7e: neg16(r4);                                    mcu.pc = 0x5b80; break;
+    case 0x5b80: mcu.pc = 0x5b90; break;
+    case 0x5b82: cmp16(r4, 0x0fa0);                            mcu.pc = 0x5b85; break;
+    case 0x5b85: mcu.pc = (mcu.sr & STATUS_C) ? 0x5b8a : 0x5b87; break;
+    case 0x5b87: movi16(r4, 0x0fa0);                           mcu.pc = 0x5b8a; break;
+    case 0x5b8a: add16(r4, r4);                                mcu.pc = 0x5b8c; break;
+    case 0x5b8c: mulxu16_imm(0xa7c7, r4, r5);                  mcu.pc = 0x5b90; break;
+    case 0x5b90: store16(ind_addr(0, (uint16_t)-114), r4);     mcu.pc = 0x5b93; break;
+
+    /* group P+0x96: tone[87] (no centre subtraction), tables
+     * 91a0/9300/9460/95c0/9720, clamp 0xfc0, >>2, <<4, *0x8105. */
+    case 0x5b93: load16(r2, dp_addr(0xd17e));                  mcu.pc = 0x5b97; break;
+    case 0x5b97: load8(r4, ind_addr(2, 87));                   mcu.pc = 0x5b9a; break;
+    case 0x5b9a: mulxu8_mem(dp_addr(0xd180), r4);              mcu.pc = 0x5b9e; break;
+    case 0x5b9e: shlr16(r4);                                   mcu.pc = 0x5ba0; break;
+    case 0x5ba0: shlr16(r4);                                   mcu.pc = 0x5ba2; break;
+    case 0x5ba2: add16_mem(r4, ind_addr(3, 0x91a0));           mcu.pc = 0x5ba6; break;
+    case 0x5ba6: add16_mem(r4, ind_addr(3, 0x9300));           mcu.pc = 0x5baa; break;
+    case 0x5baa: add16_mem(r4, ind_addr(3, 0x9460));           mcu.pc = 0x5bae; break;
+    case 0x5bae: add16_mem(r4, ind_addr(3, 0x95c0));           mcu.pc = 0x5bb2; break;
+    case 0x5bb2: add16_mem(r4, ind_addr(3, 0x9720));           mcu.pc = 0x5bb6; break;
+    case 0x5bb6: mcu.pc = (mcu.sr & STATUS_N) ? 0x5bb8 : 0x5bd2; break;
+    case 0x5bb8: neg16(r4);                                    mcu.pc = 0x5bba; break;
+    case 0x5bba: cmp16(r4, 0x0fc0);                            mcu.pc = 0x5bbd; break;
+    case 0x5bbd: mcu.pc = (mcu.sr & STATUS_C) ? 0x5bc2 : 0x5bbf; break;
+    case 0x5bbf: movi16(r4, 0x0fc0);                           mcu.pc = 0x5bc2; break;
+    case 0x5bc2: add16(r4, r4);                                mcu.pc = 0x5bc4; break;
+    case 0x5bc4: add16(r4, r4);                                mcu.pc = 0x5bc6; break;
+    case 0x5bc6: add16(r4, r4);                                mcu.pc = 0x5bc8; break;
+    case 0x5bc8: add16(r4, r4);                                mcu.pc = 0x5bca; break;
+    case 0x5bca: mulxu16_imm(0x8105, r4, r5);                  mcu.pc = 0x5bce; break;
+    case 0x5bce: neg16(r4);                                    mcu.pc = 0x5bd0; break;
+    case 0x5bd0: mcu.pc = 0x5be6; break;
+    case 0x5bd2: cmp16(r4, 0x0fc0);                            mcu.pc = 0x5bd5; break;
+    case 0x5bd5: mcu.pc = (mcu.sr & STATUS_C) ? 0x5bda : 0x5bd7; break;
+    case 0x5bd7: movi16(r4, 0x0fc0);                           mcu.pc = 0x5bda; break;
+    case 0x5bda: add16(r4, r4);                                mcu.pc = 0x5bdc; break;
+    case 0x5bdc: add16(r4, r4);                                mcu.pc = 0x5bde; break;
+    case 0x5bde: add16(r4, r4);                                mcu.pc = 0x5be0; break;
+    case 0x5be0: add16(r4, r4);                                mcu.pc = 0x5be2; break;
+    case 0x5be2: mulxu16_imm(0x8105, r4, r5);                  mcu.pc = 0x5be6; break;
+    case 0x5be6: store16(ind_addr(0, 0x96), r4);               mcu.pc = 0x5bea; break;
+
+    /* group P+0x8e: tone[83], tables 9120/9280/93e0/9540/96a0, clamp 0xfc0,
+     * >>2, <<4, *0x8105. */
+    case 0x5bea: load16(r2, dp_addr(0xd17e));                  mcu.pc = 0x5bee; break;
+    case 0x5bee: load8(r4, ind_addr(2, 83));                   mcu.pc = 0x5bf1; break;
+    case 0x5bf1: mulxu8_mem(dp_addr(0xd180), r4);              mcu.pc = 0x5bf5; break;
+    case 0x5bf5: shlr16(r4);                                   mcu.pc = 0x5bf7; break;
+    case 0x5bf7: shlr16(r4);                                   mcu.pc = 0x5bf9; break;
+    case 0x5bf9: add16_mem(r4, ind_addr(3, 0x9120));           mcu.pc = 0x5bfd; break;
+    case 0x5bfd: add16_mem(r4, ind_addr(3, 0x9280));           mcu.pc = 0x5c01; break;
+    case 0x5c01: add16_mem(r4, ind_addr(3, 0x93e0));           mcu.pc = 0x5c05; break;
+    case 0x5c05: add16_mem(r4, ind_addr(3, 0x9540));           mcu.pc = 0x5c09; break;
+    case 0x5c09: add16_mem(r4, ind_addr(3, 0x96a0));           mcu.pc = 0x5c0d; break;
+    case 0x5c0d: mcu.pc = (mcu.sr & STATUS_N) ? 0x5c0f : 0x5c29; break;
+    case 0x5c0f: neg16(r4);                                    mcu.pc = 0x5c11; break;
+    case 0x5c11: cmp16(r4, 0x0fc0);                            mcu.pc = 0x5c14; break;
+    case 0x5c14: mcu.pc = (mcu.sr & STATUS_C) ? 0x5c19 : 0x5c16; break;
+    case 0x5c16: movi16(r4, 0x0fc0);                           mcu.pc = 0x5c19; break;
+    case 0x5c19: add16(r4, r4);                                mcu.pc = 0x5c1b; break;
+    case 0x5c1b: add16(r4, r4);                                mcu.pc = 0x5c1d; break;
+    case 0x5c1d: add16(r4, r4);                                mcu.pc = 0x5c1f; break;
+    case 0x5c1f: add16(r4, r4);                                mcu.pc = 0x5c21; break;
+    case 0x5c21: mulxu16_imm(0x8105, r4, r5);                  mcu.pc = 0x5c25; break;
+    case 0x5c25: neg16(r4);                                    mcu.pc = 0x5c27; break;
+    case 0x5c27: mcu.pc = 0x5c3d; break;
+    case 0x5c29: cmp16(r4, 0x0fc0);                            mcu.pc = 0x5c2c; break;
+    case 0x5c2c: mcu.pc = (mcu.sr & STATUS_C) ? 0x5c31 : 0x5c2e; break;
+    case 0x5c2e: movi16(r4, 0x0fc0);                           mcu.pc = 0x5c31; break;
+    case 0x5c31: add16(r4, r4);                                mcu.pc = 0x5c33; break;
+    case 0x5c33: add16(r4, r4);                                mcu.pc = 0x5c35; break;
+    case 0x5c35: add16(r4, r4);                                mcu.pc = 0x5c37; break;
+    case 0x5c37: add16(r4, r4);                                mcu.pc = 0x5c39; break;
+    case 0x5c39: mulxu16_imm(0x8105, r4, r5);                  mcu.pc = 0x5c3d; break;
+    case 0x5c3d: store16(ind_addr(0, 0x8e), r4);               mcu.pc = 0x5c41; break;
+
+    /* group P+0x94: tone[86], tables 9180/92e0/9440/95a0/9700, clamp 0xfc0,
+     * >>2, <<1, *0xc30d. */
+    case 0x5c41: load16(r2, dp_addr(0xd17e));                  mcu.pc = 0x5c45; break;
+    case 0x5c45: load8(r4, ind_addr(2, 86));                   mcu.pc = 0x5c48; break;
+    case 0x5c48: mulxu8_mem(dp_addr(0xd180), r4);              mcu.pc = 0x5c4c; break;
+    case 0x5c4c: shlr16(r4);                                   mcu.pc = 0x5c4e; break;
+    case 0x5c4e: shlr16(r4);                                   mcu.pc = 0x5c50; break;
+    case 0x5c50: add16_mem(r4, ind_addr(3, 0x9180));           mcu.pc = 0x5c54; break;
+    case 0x5c54: add16_mem(r4, ind_addr(3, 0x92e0));           mcu.pc = 0x5c58; break;
+    case 0x5c58: add16_mem(r4, ind_addr(3, 0x9440));           mcu.pc = 0x5c5c; break;
+    case 0x5c5c: add16_mem(r4, ind_addr(3, 0x95a0));           mcu.pc = 0x5c60; break;
+    case 0x5c60: add16_mem(r4, ind_addr(3, 0x9700));           mcu.pc = 0x5c64; break;
+    case 0x5c64: mcu.pc = (mcu.sr & STATUS_N) ? 0x5c66 : 0x5c7a; break;
+    case 0x5c66: neg16(r4);                                    mcu.pc = 0x5c68; break;
+    case 0x5c68: cmp16(r4, 0x0fc0);                            mcu.pc = 0x5c6b; break;
+    case 0x5c6b: mcu.pc = (mcu.sr & STATUS_C) ? 0x5c70 : 0x5c6d; break;
+    case 0x5c6d: movi16(r4, 0x0fc0);                           mcu.pc = 0x5c70; break;
+    case 0x5c70: add16(r4, r4);                                mcu.pc = 0x5c72; break;
+    case 0x5c72: mulxu16_imm(0xc30d, r4, r5);                  mcu.pc = 0x5c76; break;
+    case 0x5c76: neg16(r4);                                    mcu.pc = 0x5c78; break;
+    case 0x5c78: mcu.pc = 0x5c88; break;
+    case 0x5c7a: cmp16(r4, 0x0fc0);                            mcu.pc = 0x5c7d; break;
+    case 0x5c7d: mcu.pc = (mcu.sr & STATUS_C) ? 0x5c82 : 0x5c7f; break;
+    case 0x5c7f: movi16(r4, 0x0fc0);                           mcu.pc = 0x5c82; break;
+    case 0x5c82: add16(r4, r4);                                mcu.pc = 0x5c84; break;
+    case 0x5c84: mulxu16_imm(0xc30d, r4, r5);                  mcu.pc = 0x5c88; break;
+    case 0x5c88: store16(ind_addr(0, 0x94), r4);               mcu.pc = 0x5c8c; break;
+
+    /* group P+0x8c: tone[82], tables 9100/9260/93c0/9520/9680, clamp 0xfc0,
+     * >>2, <<1, *0xc30d. */
+    case 0x5c8c: load16(r2, dp_addr(0xd17e));                  mcu.pc = 0x5c90; break;
+    case 0x5c90: load8(r4, ind_addr(2, 82));                   mcu.pc = 0x5c93; break;
+    case 0x5c93: mulxu8_mem(dp_addr(0xd180), r4);              mcu.pc = 0x5c97; break;
+    case 0x5c97: shlr16(r4);                                   mcu.pc = 0x5c99; break;
+    case 0x5c99: shlr16(r4);                                   mcu.pc = 0x5c9b; break;
+    case 0x5c9b: add16_mem(r4, ind_addr(3, 0x9100));           mcu.pc = 0x5c9f; break;
+    case 0x5c9f: add16_mem(r4, ind_addr(3, 0x9260));           mcu.pc = 0x5ca3; break;
+    case 0x5ca3: add16_mem(r4, ind_addr(3, 0x93c0));           mcu.pc = 0x5ca7; break;
+    case 0x5ca7: add16_mem(r4, ind_addr(3, 0x9520));           mcu.pc = 0x5cab; break;
+    case 0x5cab: add16_mem(r4, ind_addr(3, 0x9680));           mcu.pc = 0x5caf; break;
+    case 0x5caf: mcu.pc = (mcu.sr & STATUS_N) ? 0x5cb1 : 0x5cc5; break;
+    case 0x5cb1: neg16(r4);                                    mcu.pc = 0x5cb3; break;
+    case 0x5cb3: cmp16(r4, 0x0fc0);                            mcu.pc = 0x5cb6; break;
+    case 0x5cb6: mcu.pc = (mcu.sr & STATUS_C) ? 0x5cbb : 0x5cb8; break;
+    case 0x5cb8: movi16(r4, 0x0fc0);                           mcu.pc = 0x5cbb; break;
+    case 0x5cbb: add16(r4, r4);                                mcu.pc = 0x5cbd; break;
+    case 0x5cbd: mulxu16_imm(0xc30d, r4, r5);                  mcu.pc = 0x5cc1; break;
+    case 0x5cc1: neg16(r4);                                    mcu.pc = 0x5cc3; break;
+    case 0x5cc3: mcu.pc = 0x5cd3; break;
+    case 0x5cc5: cmp16(r4, 0x0fc0);                            mcu.pc = 0x5cc8; break;
+    case 0x5cc8: mcu.pc = (mcu.sr & STATUS_C) ? 0x5ccd : 0x5cca; break;
+    case 0x5cca: movi16(r4, 0x0fc0);                           mcu.pc = 0x5ccd; break;
+    case 0x5ccd: add16(r4, r4);                                mcu.pc = 0x5ccf; break;
+    case 0x5ccf: mulxu16_imm(0xc30d, r4, r5);                  mcu.pc = 0x5cd3; break;
+    case 0x5cd3: store16(ind_addr(0, 0x8c), r4);               mcu.pc = 0x5cd7; break;
+
+    /* group P+0x92: tone[85], tables 9160/92c0/9420/9580/96e0, clamp 0xfc0,
+     * >>2, <<1, *0xbe7a. */
+    case 0x5cd7: load16(r2, dp_addr(0xd17e));                  mcu.pc = 0x5cdb; break;
+    case 0x5cdb: load8(r4, ind_addr(2, 85));                   mcu.pc = 0x5cde; break;
+    case 0x5cde: mulxu8_mem(dp_addr(0xd180), r4);              mcu.pc = 0x5ce2; break;
+    case 0x5ce2: shlr16(r4);                                   mcu.pc = 0x5ce4; break;
+    case 0x5ce4: shlr16(r4);                                   mcu.pc = 0x5ce6; break;
+    case 0x5ce6: add16_mem(r4, ind_addr(3, 0x9160));           mcu.pc = 0x5cea; break;
+    case 0x5cea: add16_mem(r4, ind_addr(3, 0x92c0));           mcu.pc = 0x5cee; break;
+    case 0x5cee: add16_mem(r4, ind_addr(3, 0x9420));           mcu.pc = 0x5cf2; break;
+    case 0x5cf2: add16_mem(r4, ind_addr(3, 0x9580));           mcu.pc = 0x5cf6; break;
+    case 0x5cf6: add16_mem(r4, ind_addr(3, 0x96e0));           mcu.pc = 0x5cfa; break;
+    case 0x5cfa: mcu.pc = (mcu.sr & STATUS_N) ? 0x5cfc : 0x5d10; break;
+    case 0x5cfc: neg16(r4);                                    mcu.pc = 0x5cfe; break;
+    case 0x5cfe: cmp16(r4, 0x0fc0);                            mcu.pc = 0x5d01; break;
+    case 0x5d01: mcu.pc = (mcu.sr & STATUS_C) ? 0x5d06 : 0x5d03; break;
+    case 0x5d03: movi16(r4, 0x0fc0);                           mcu.pc = 0x5d06; break;
+    case 0x5d06: add16(r4, r4);                                mcu.pc = 0x5d08; break;
+    case 0x5d08: mulxu16_imm(0xbe7a, r4, r5);                  mcu.pc = 0x5d0c; break;
+    case 0x5d0c: neg16(r4);                                    mcu.pc = 0x5d0e; break;
+    case 0x5d0e: mcu.pc = 0x5d1e; break;
+    case 0x5d10: cmp16(r4, 0x0fc0);                            mcu.pc = 0x5d13; break;
+    case 0x5d13: mcu.pc = (mcu.sr & STATUS_C) ? 0x5d18 : 0x5d15; break;
+    case 0x5d15: movi16(r4, 0x0fc0);                           mcu.pc = 0x5d18; break;
+    case 0x5d18: add16(r4, r4);                                mcu.pc = 0x5d1a; break;
+    case 0x5d1a: mulxu16_imm(0xbe7a, r4, r5);                  mcu.pc = 0x5d1e; break;
+    case 0x5d1e: store16(ind_addr(0, 0x92), r4);               mcu.pc = 0x5d22; break;
+
+    /* group P+0x90: tone[81], tables 90e0/9240/93a0/9500/9660, clamp 0xfc0,
+     * >>2, <<1, *0xbe7a. */
+    case 0x5d22: load16(r2, dp_addr(0xd17e));                  mcu.pc = 0x5d26; break;
+    case 0x5d26: load8(r4, ind_addr(2, 81));                   mcu.pc = 0x5d29; break;
+    case 0x5d29: mulxu8_mem(dp_addr(0xd180), r4);              mcu.pc = 0x5d2d; break;
+    case 0x5d2d: shlr16(r4);                                   mcu.pc = 0x5d2f; break;
+    case 0x5d2f: shlr16(r4);                                   mcu.pc = 0x5d31; break;
+    case 0x5d31: add16_mem(r4, ind_addr(3, 0x90e0));           mcu.pc = 0x5d35; break;
+    case 0x5d35: add16_mem(r4, ind_addr(3, 0x9240));           mcu.pc = 0x5d39; break;
+    case 0x5d39: add16_mem(r4, ind_addr(3, 0x93a0));           mcu.pc = 0x5d3d; break;
+    case 0x5d3d: add16_mem(r4, ind_addr(3, 0x9500));           mcu.pc = 0x5d41; break;
+    case 0x5d41: add16_mem(r4, ind_addr(3, 0x9660));           mcu.pc = 0x5d45; break;
+    case 0x5d45: mcu.pc = (mcu.sr & STATUS_N) ? 0x5d47 : 0x5d5b; break;
+    case 0x5d47: neg16(r4);                                    mcu.pc = 0x5d49; break;
+    case 0x5d49: cmp16(r4, 0x0fc0);                            mcu.pc = 0x5d4c; break;
+    case 0x5d4c: mcu.pc = (mcu.sr & STATUS_C) ? 0x5d51 : 0x5d4e; break;
+    case 0x5d4e: movi16(r4, 0x0fc0);                           mcu.pc = 0x5d51; break;
+    case 0x5d51: add16(r4, r4);                                mcu.pc = 0x5d53; break;
+    case 0x5d53: mulxu16_imm(0xbe7a, r4, r5);                  mcu.pc = 0x5d57; break;
+    case 0x5d57: neg16(r4);                                    mcu.pc = 0x5d59; break;
+    case 0x5d59: mcu.pc = 0x5d69; break;
+    case 0x5d5b: cmp16(r4, 0x0fc0);                            mcu.pc = 0x5d5e; break;
+    case 0x5d5e: mcu.pc = (mcu.sr & STATUS_C) ? 0x5d63 : 0x5d60; break;
+    case 0x5d60: movi16(r4, 0x0fc0);                           mcu.pc = 0x5d63; break;
+    case 0x5d63: add16(r4, r4);                                mcu.pc = 0x5d65; break;
+    case 0x5d65: mulxu16_imm(0xbe7a, r4, r5);                  mcu.pc = 0x5d69; break;
+    case 0x5d69: store16(ind_addr(0, 0x90), r4);               mcu.pc = 0x5d6d; break;
+
+    case 0x5d6d: mcu.pc = MCU_PopStack(); break;
+    default: break;
+    }
+    return 1;
+}
+
 } /* anonymous namespace */
+
+/* S1/S2 materialize + coeff_copy: one entry per instruction start PC (all
+ * ran one H8 instruction per step from round 6 on; see the S1 comment). */
+const uint16_t kMaterializePcs[] = {
+    0x53eb, 0x53ed, 0x53ef, 0x53f3, 0x53f6, 0x53fa, 0x53fe, 0x5402,
+    0x5406, 0x540a, 0x540e, 0x5412, 0x5416, 0x541a, 0x541e, 0x5422,
+    0x5426, 0x542a, 0x542d, 0x542f, 0x5431, 0x5436, 0x5438, 0x543c,
+    0x5440, 0x5442, 0x5446, 0x5449, 0x544b, 0x544f, 0x5451, 0x5453,
+    0x5456, 0x5458, 0x545a, 0x545d, 0x545f, 0x5461, 0x5465, 0x5467,
+    0x5469, 0x546c, 0x546d,
+};
+
+const uint16_t kCoeffCopyPcs[] = {
+    0x5d6e, 0x5d72, 0x5d76, 0x5d7a, 0x5d7e, 0x5d82, 0x5d86, 0x5d89,
+    0x5d8c, 0x5d8f, 0x5d92, 0x5d96, 0x5d9a, 0x5d9e, 0x5da2, 0x5da6,
+    0x5daa, 0x5dae, 0x5db2, 0x5db6, 0x5dba, 0x5dbe, 0x5dc2,
+};
 
 /* Instruction start PCs of the three routines (registered one entry each). */
 const uint16_t kToneFieldsPcs[] = {
@@ -1532,6 +1844,35 @@ const uint16_t kLoopWritePcs[] = {
     0x5638, 0x563d, 0x5640, 0x5642, 0x5644, 0x5647, 0x5649,
 };
 
+/* S8 flush_off / param_write / flush_on: per-PC from round 6 (a span can
+ * cover a due -midiseq post; see the S1 comment). */
+const uint16_t kFlushOffPcs[] = {
+    0x54fb, 0x54fe, 0x5503, 0x5505, 0x5509, 0x550d, 0x550f,
+    0x5511, 0x5515, 0x5519, 0x551b, 0x551d, 0x5521,
+};
+
+const uint16_t kParamWritePcs[] = {
+    0x5533, 0x5536, 0x553a, 0x553e, 0x5540, 0x5543, 0x5545, 0x5548,
+    0x554c, 0x5550, 0x5553, 0x5556, 0x5559, 0x555b, 0x555d, 0x5560,
+    0x5564, 0x5568, 0x556b, 0x556e, 0x5571, 0x5573, 0x5575, 0x5578,
+    0x557c, 0x5580, 0x5583, 0x5586, 0x5589, 0x558b, 0x558d, 0x5590,
+    0x5594, 0x5598, 0x559b, 0x559e, 0x55a0, 0x55a3, 0x55a7, 0x55aa,
+    0x55ad, 0x55af, 0x55b2, 0x55b6, 0x55b9, 0x55bc, 0x55be, 0x55c1,
+    0x55c3, 0x55c6, 0x55c8, 0x55cb, 0x55cd, 0x55d0, 0x55d2, 0x55d5,
+    0x55d7, 0x55da, 0x55dd, 0x55e0, 0x55e2, 0x55e5, 0x55e8, 0x55ea,
+    0x55ed, 0x55f0, 0x55f3, 0x55f6, 0x55f8, 0x55fb, 0x55fd, 0x5600,
+    0x5604, 0x5607, 0x5608, 0x560b, 0x560e, 0x5610, 0x5612, 0x5615,
+    0x5619, 0x561c, 0x561f, 0x5622, 0x5625,
+};
+
+const uint16_t kFlushOnAPcs[] = {
+    0x564a, 0x564e, 0x5652, 0x5656, 0x565a, 0x565e,
+};
+
+const uint16_t kFlushOnBPcs[] = {
+    0x5668, 0x566c, 0x5670,
+};
+
 /* S9 param_ack (IML=0, trapa handshake loop). */
 const uint16_t kParamAckPcs[] = {
     0x54cc, 0x54d0, 0x54d3, 0x54d5, 0x54d7, 0x54d9, 0x54db, 0x54dd,
@@ -1555,12 +1896,55 @@ const uint16_t kPcmPlayPcs[] = {
     0x53e1, 0x53e4, 0x53e8,
 };
 
+/* S6 coeff_calc: per-PC entries (IML=0, dense resume PCs; fixed-point math is
+ * transcribed as named operations, see routine_coeff_calc_step). */
+const uint16_t kCoeffCalcPcs[] = {
+    0x5998, 0x599a, 0x599e, 0x59a0, 0x59a2, 0x59a6, 0x59aa, 0x59ac, 0x59ae, 0x59b0,
+    0x59b4, 0x59b6, 0x59ba, 0x59be, 0x59c1, 0x59c4, 0x59c6, 0x59c8, 0x59ca, 0x59cc,
+    0x59ce, 0x59cf, 0x59d1, 0x59d3, 0x59d5, 0x59d9, 0x59dd, 0x59e1, 0x59e5, 0x59e9,
+    0x59eb, 0x59ed, 0x59f0, 0x59f2, 0x59f5, 0x59f7, 0x59f9, 0x59fb, 0x59ff, 0x5a01,
+    0x5a03, 0x5a06, 0x5a08, 0x5a0b, 0x5a0d, 0x5a0f, 0x5a11, 0x5a15, 0x5a19, 0x5a1d,
+    0x5a20, 0x5a23, 0x5a25, 0x5a27, 0x5a2b, 0x5a2d, 0x5a2f, 0x5a31, 0x5a35, 0x5a37,
+    0x5a3b, 0x5a3f, 0x5a43, 0x5a47, 0x5a4b, 0x5a4d, 0x5a4f, 0x5a52, 0x5a54, 0x5a57,
+    0x5a59, 0x5a5b, 0x5a5d, 0x5a5f, 0x5a63, 0x5a65, 0x5a67, 0x5a6a, 0x5a6c, 0x5a6f,
+    0x5a71, 0x5a73, 0x5a75, 0x5a77, 0x5a7b, 0x5a7f, 0x5a83, 0x5a86, 0x5a89, 0x5a8b,
+    0x5a8d, 0x5a91, 0x5a93, 0x5a95, 0x5a97, 0x5a9b, 0x5a9d, 0x5aa1, 0x5aa5, 0x5aa9,
+    0x5aad, 0x5ab1, 0x5ab3, 0x5ab5, 0x5ab8, 0x5aba, 0x5abd, 0x5abf, 0x5ac1, 0x5ac3,
+    0x5ac7, 0x5ac9, 0x5acb, 0x5ace, 0x5ad0, 0x5ad3, 0x5ad5, 0x5ad7, 0x5ad9, 0x5add,
+    0x5ae1, 0x5ae5, 0x5ae8, 0x5aeb, 0x5aed, 0x5aef, 0x5af3, 0x5af5, 0x5af7, 0x5af9,
+    0x5afd, 0x5aff, 0x5b03, 0x5b07, 0x5b0b, 0x5b0f, 0x5b13, 0x5b15, 0x5b17, 0x5b1a,
+    0x5b1c, 0x5b1f, 0x5b21, 0x5b25, 0x5b27, 0x5b29, 0x5b2c, 0x5b2e, 0x5b31, 0x5b33,
+    0x5b37, 0x5b3a, 0x5b3e, 0x5b41, 0x5b44, 0x5b46, 0x5b48, 0x5b4c, 0x5b4e, 0x5b50,
+    0x5b52, 0x5b56, 0x5b58, 0x5b5c, 0x5b60, 0x5b64, 0x5b68, 0x5b6c, 0x5b6e, 0x5b70,
+    0x5b73, 0x5b75, 0x5b78, 0x5b7a, 0x5b7e, 0x5b80, 0x5b82, 0x5b85, 0x5b87, 0x5b8a,
+    0x5b8c, 0x5b90, 0x5b93, 0x5b97, 0x5b9a, 0x5b9e, 0x5ba0, 0x5ba2, 0x5ba6, 0x5baa,
+    0x5bae, 0x5bb2, 0x5bb6, 0x5bb8, 0x5bba, 0x5bbd, 0x5bbf, 0x5bc2, 0x5bc4, 0x5bc6,
+    0x5bc8, 0x5bca, 0x5bce, 0x5bd0, 0x5bd2, 0x5bd5, 0x5bd7, 0x5bda, 0x5bdc, 0x5bde,
+    0x5be0, 0x5be2, 0x5be6, 0x5bea, 0x5bee, 0x5bf1, 0x5bf5, 0x5bf7, 0x5bf9, 0x5bfd,
+    0x5c01, 0x5c05, 0x5c09, 0x5c0d, 0x5c0f, 0x5c11, 0x5c14, 0x5c16, 0x5c19, 0x5c1b,
+    0x5c1d, 0x5c1f, 0x5c21, 0x5c25, 0x5c27, 0x5c29, 0x5c2c, 0x5c2e, 0x5c31, 0x5c33,
+    0x5c35, 0x5c37, 0x5c39, 0x5c3d, 0x5c41, 0x5c45, 0x5c48, 0x5c4c, 0x5c4e, 0x5c50,
+    0x5c54, 0x5c58, 0x5c5c, 0x5c60, 0x5c64, 0x5c66, 0x5c68, 0x5c6b, 0x5c6d, 0x5c70,
+    0x5c72, 0x5c76, 0x5c78, 0x5c7a, 0x5c7d, 0x5c7f, 0x5c82, 0x5c84, 0x5c88, 0x5c8c,
+    0x5c90, 0x5c93, 0x5c97, 0x5c99, 0x5c9b, 0x5c9f, 0x5ca3, 0x5ca7, 0x5cab, 0x5caf,
+    0x5cb1, 0x5cb3, 0x5cb6, 0x5cb8, 0x5cbb, 0x5cbd, 0x5cc1, 0x5cc3, 0x5cc5, 0x5cc8,
+    0x5cca, 0x5ccd, 0x5ccf, 0x5cd3, 0x5cd7, 0x5cdb, 0x5cde, 0x5ce2, 0x5ce4, 0x5ce6,
+    0x5cea, 0x5cee, 0x5cf2, 0x5cf6, 0x5cfa, 0x5cfc, 0x5cfe, 0x5d01, 0x5d03, 0x5d06,
+    0x5d08, 0x5d0c, 0x5d0e, 0x5d10, 0x5d13, 0x5d15, 0x5d18, 0x5d1a, 0x5d1e, 0x5d22,
+    0x5d26, 0x5d29, 0x5d2d, 0x5d2f, 0x5d31, 0x5d35, 0x5d39, 0x5d3d, 0x5d41, 0x5d45,
+    0x5d47, 0x5d49, 0x5d4c, 0x5d4e, 0x5d51, 0x5d53, 0x5d57, 0x5d59, 0x5d5b, 0x5d5e,
+    0x5d60, 0x5d63, 0x5d65, 0x5d69, 0x5d6d,
+};
 } /* namespace mk2c */
 
 void MK2CPP_VoiceMaterializeFillTables(void)
 {
-    MK2CPP_HandRegisterRoutine(0x000053ebu, &mk2c::routine_materialize);
-    MK2CPP_HandRegisterRoutine(0x00005d6eu, &mk2c::routine_coeff_copy);
+    /* S1/S2 materialize + coeff_copy: per-PC (round 6; an L1 block spanning a
+     * -midiseq post moved the SM's byte delivery and diverged at c212.565M). */
+    for (uint32_t i = 0; i < sizeof(mk2c::kMaterializePcs) / sizeof(mk2c::kMaterializePcs[0]); i++)
+        MK2CPP_HandRegisterRoutine(mk2c::kMaterializePcs[i], &mk2c::routine_materialize_step);
+    for (uint32_t i = 0; i < sizeof(mk2c::kCoeffCopyPcs) / sizeof(mk2c::kCoeffCopyPcs[0]); i++)
+        MK2CPP_HandRegisterRoutine(mk2c::kCoeffCopyPcs[i], &mk2c::routine_coeff_copy_step);
 
     /* S3/S4/S5: one entry per instruction (each returns 1, i.e. exactly one
      * H8 instruction; the host's poll/TIMER_Clock/trace per step then match
@@ -1579,14 +1963,18 @@ void MK2CPP_VoiceMaterializeFillTables(void)
     for (uint32_t i = 0; i < sizeof(mk2c::kMaskTailPcs) / sizeof(mk2c::kMaskTailPcs[0]); i++)
         MK2CPP_HandRegisterRoutine(mk2c::kMaskTailPcs[i], &mk2c::routine_mask_tail_step);
 
-    /* S7/S8 flush/mask/param blocks: IML=7, no internal interrupt observed.
-     * loop_write stays per-PC (busy-wait needs host device updates). */
-    MK2CPP_HandRegisterRoutine(0x000054fbu, &mk2c::routine_flush_off);
-    MK2CPP_HandRegisterRoutine(0x00005533u, &mk2c::routine_param_write);
+    /* S7/S8 flush/mask/param blocks: per-PC from round 6 (IML=7 does not
+     * protect the host tail cadence; loop_write already per-PC). */
+    for (uint32_t i = 0; i < sizeof(mk2c::kFlushOffPcs) / sizeof(mk2c::kFlushOffPcs[0]); i++)
+        MK2CPP_HandRegisterRoutine(mk2c::kFlushOffPcs[i], &mk2c::routine_flush_off_step);
+    for (uint32_t i = 0; i < sizeof(mk2c::kParamWritePcs) / sizeof(mk2c::kParamWritePcs[0]); i++)
+        MK2CPP_HandRegisterRoutine(mk2c::kParamWritePcs[i], &mk2c::routine_param_write_step);
     for (uint32_t i = 0; i < sizeof(mk2c::kLoopWritePcs) / sizeof(mk2c::kLoopWritePcs[0]); i++)
         MK2CPP_HandRegisterRoutine(mk2c::kLoopWritePcs[i], &mk2c::routine_loop_write_step);
-    MK2CPP_HandRegisterRoutine(0x0000564au, &mk2c::routine_flush_on_a);
-    MK2CPP_HandRegisterRoutine(0x00005668u, &mk2c::routine_flush_on_b);
+    for (uint32_t i = 0; i < sizeof(mk2c::kFlushOnAPcs) / sizeof(mk2c::kFlushOnAPcs[0]); i++)
+        MK2CPP_HandRegisterRoutine(mk2c::kFlushOnAPcs[i], &mk2c::routine_flush_on_a_step);
+    for (uint32_t i = 0; i < sizeof(mk2c::kFlushOnBPcs) / sizeof(mk2c::kFlushOnBPcs[0]); i++)
+        MK2CPP_HandRegisterRoutine(mk2c::kFlushOnBPcs[i], &mk2c::routine_flush_on_b_step);
 
     /* S9 param_ack and S10 pcm_play: per-PC entries; bsr targets are the
      * registered child routines, so the host keeps dispatching. */
@@ -1594,4 +1982,8 @@ void MK2CPP_VoiceMaterializeFillTables(void)
         MK2CPP_HandRegisterRoutine(mk2c::kParamAckPcs[i], &mk2c::routine_param_ack_step);
     for (uint32_t i = 0; i < sizeof(mk2c::kPcmPlayPcs) / sizeof(mk2c::kPcmPlayPcs[0]); i++)
         MK2CPP_HandRegisterRoutine(mk2c::kPcmPlayPcs[i], &mk2c::routine_pcm_play_step);
+
+    /* S6 coeff_calc: per-PC (IML=0, dense resume PCs; no deferral). */
+    for (uint32_t i = 0; i < sizeof(mk2c::kCoeffCalcPcs) / sizeof(mk2c::kCoeffCalcPcs[0]); i++)
+        MK2CPP_HandRegisterRoutine(mk2c::kCoeffCalcPcs[i], &mk2c::routine_coeff_calc_step);
 }

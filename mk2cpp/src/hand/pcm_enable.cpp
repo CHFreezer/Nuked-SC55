@@ -134,6 +134,7 @@ void MK2CPP_HandFillTables(void)
      * the pool-init L0 PCs there. */
     MK2CPP_PoolFillTables();
     void MK2CPP_VoiceMaterializeFillTables(void); MK2CPP_VoiceMaterializeFillTables(); /* voice_materialize.cpp (S1/S2) */
+    void MK2CPP_MaskAccFillTables(void); MK2CPP_MaskAccFillTables(); /* mask_acc.cpp (B7) */
 }
 
 void MK2CPP_HandPostReset(void)

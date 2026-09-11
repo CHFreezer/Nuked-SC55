@@ -6,14 +6,18 @@
 #include <string.h>
 
 #define MIDI_BYTE_GAP_DEFAULT 7680ULL
+/* Longest event kept whole in the schedule; SysEx (GS/GM reset, dumps) must
+ * survive the conversion or the playback patches/drum kits are wrong. */
+#define MAX_EVENT_BYTES 1024
 
 typedef struct {
     unsigned long long tick;
     unsigned long long cycle;
     int track;
     int seq;
-    unsigned char bytes[8];
+    unsigned char bytes[MAX_EVENT_BYTES];
     int nbytes;
+    int sysex; /* all bytes posted at one cycle (no byte_gap) */
 } Event;
 
 typedef struct {
@@ -382,11 +386,41 @@ int main(int argc, char **argv)
                     tr.pos += mlen;
                 } else if (status == 0xF0 || status == 0xF7) {
                     unsigned long slen;
+                    unsigned long j;
+                    Event ev;
                     if (!r_vlq(&tr, &slen))
                         die("bad sysex event", in_path);
                     if (tr.pos + slen > tr.size)
                         die("truncated sysex event", in_path);
+                    ev.track = t;
+                    ev.seq = seq++;
+                    ev.tick = track_tick[t];
+                    ev.cycle = 0;
+                    ev.sysex = 1;
+                    ev.nbytes = 0;
+                    if (status == 0xF0) {
+                        if (ev.nbytes < MAX_EVENT_BYTES)
+                            ev.bytes[ev.nbytes++] = 0xF0;
+                    }
+                    if (slen > (unsigned long)(MAX_EVENT_BYTES - ev.nbytes))
+                        die("sysex event too large", in_path);
+                    for (j = 0; j < slen; j++)
+                        ev.bytes[ev.nbytes++] = tr.buf[tr.pos + j];
+                    if (status == 0xF0 && ev.nbytes > 0 && ev.bytes[ev.nbytes - 1] != 0xF7) {
+                        if (ev.nbytes >= MAX_EVENT_BYTES)
+                            die("sysex event too large", in_path);
+                        ev.bytes[ev.nbytes++] = 0xF7;
+                    }
                     tr.pos += slen;
+                    if (events_cap == nevents) {
+                        size_t ncap = events_cap ? events_cap * 2 : 1024;
+                        Event *ne = (Event *)realloc(events, ncap * sizeof(Event));
+                        if (!ne)
+                            die("out of memory", NULL);
+                        events = ne;
+                        events_cap = ncap;
+                    }
+                    events[nevents++] = ev;
                 } else if ((status & 0xF0) >= 0x80 && (status & 0xF0) <= 0xE0) {
                     int dbytes = ((status & 0xF0) == 0xC0 || (status & 0xF0) == 0xD0) ? 1 : 2;
                     Event ev;
@@ -395,6 +429,7 @@ int main(int argc, char **argv)
                     ev.seq = seq++;
                     ev.tick = track_tick[t];
                     ev.cycle = 0;
+                    ev.sysex = 0;
                     ev.nbytes = 0;
                     ev.bytes[ev.nbytes++] = (unsigned char)status;
                     if (b0)
@@ -480,13 +515,24 @@ int main(int argc, char **argv)
     }
     qsort(events, nevents, sizeof(Event), cmp_event);
 
-    for (i = 0; i < nevents; i++) {
-        int b;
-        for (b = 0; b < events[i].nbytes; b++) {
-            unsigned long long cyc = events[i].cycle +
-                                     (unsigned long long)b * byte_gap;
-            push_byte(&lines, &nlines, &lines_cap, cyc, (int)i, b,
-                      events[i].bytes[b]);
+    /* Serialize like a real MIDI cable: bytes of one event are emitted
+     * back-to-back (one byte_gap apart); an event may only start once the wire
+     * is free. The previous event-local pacing interleaved the bytes of events
+     * sharing a tick (A0 B0 A1 B1 ...), which desynchronized the firmware's
+     * MIDI parser: patches/drum kits were lost and "everything is piano". */
+    {
+        unsigned long long wire = 0; /* next free serial byte time */
+        for (i = 0; i < nevents; i++) {
+            int b;
+            unsigned long long t = events[i].cycle;
+            if (t < wire)
+                t = wire;
+            for (b = 0; b < events[i].nbytes; b++) {
+                push_byte(&lines, &nlines, &lines_cap, t, (int)i, b,
+                          events[i].bytes[b]);
+                t += byte_gap;
+            }
+            wire = t;
         }
     }
     qsort(lines, nlines, sizeof(OutLine), cmp_outline);
