@@ -1,14 +1,15 @@
 # 09 M4 hand 覆盖表与集成设计
 
 > **暂缓（2026-09-11）**：本文的开关矩阵中 `pcm_ext_active=1` 仅当 `-mk2cpp &&
-> -voices:n` 且 n≠28 的设计随 256 扩展回滚而**暂缓**。hand 覆盖表 / `MK2CPP_*`
-> 集成骨架（L0/L1、稀疏 override 表、`MK2CPP_Configure/PostReset`）本身不依赖 256，
-> 仍有效；`src/hand/pcm_enable.cpp` 当前只翻译 stock 28 的 PCM flush。
+> -voices:n` 且 n≠28 的设计随 256 扩展回滚而**暂缓**（里程碑拆分后归 M5）。
+> hand 覆盖表 / `MK2CPP_*` 集成骨架（L0/L1、稀疏 override 表、
+> `MK2CPP_Configure/PostReset`）本身不依赖 256，仍有效（属 M4）；
+> `src/hand/pcm_enable.cpp` 当前只翻译 stock 28 的 PCM flush。
 
 状态：已评审 v1，2026-09-11。
 配套文档：[07 voice 语义](07_m4_voice_spec.md) · [08 PCM 引擎与音频路径](08_m4_pcm_api.md) · [10 验收 oracle](10_m4_oracle.md) · [00 计划](00_plan.md)。
 阅读顺序：00_plan §M4 → 07 → 08 → **09（集成/分派）** → 10。
-口径：验收统一 `-voices:255`（"256 复音"指容量）；原生引擎在 `-mk2cpp` 下默认参与（含 n=28），`pcm_ext_active=1` 仅当 `-mk2cpp && -voices:n` 且 n≠28；前期限定 L0（一次 `MK2CPP_Step` = 恰好一条 H8 指令），L1 在 n=28 null 通过前不得启用。
+口径：目标 = **256 声同时发音**；验收上限 `-voices:255` 是 `0xff` 哨兵 + 8-bit 池计数妥协下的**阶段性上限，非最终目标**（07 §0.5）；原生引擎在 `-mk2cpp` 下默认参与（含 n=28），`pcm_ext_active=1` 仅当 `-mk2cpp && -voices:n` 且 n≠28；前期限定 L0（一次 `MK2CPP_Step` = 恰好一条 H8 指令），L1 在 n=28 null 通过前不得启用。
 
 范围：M4「`src/hand/` 人工语义实现」如何接入现有 mk2cpp 分派；本文只定集成契约，
 voice 语义（pool/alloc/free）见 07，PCM enable/mask/编程路径见 08。

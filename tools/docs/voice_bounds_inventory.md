@@ -278,7 +278,8 @@ together with the structural changes; **MISSING** = no longer in the list.
    (`cmp rX,b`, byte stores). N is therefore capped at 255 (0xff is also the
    `a3f4/a410/a3d8/ce3f` sentinel). N ≥ 128 additionally breaks signed tests
    (`BPL/BMI`) on those byte indices unless rewritten (matches the existing
-   255-voice design decision).
+   255-voice compromise cap; the project goal remains 256 voices, true 256
+   needs a sentinel/counter change).
 
 ### 4.2 Do-not-patch list (confirmed non-voice)
 

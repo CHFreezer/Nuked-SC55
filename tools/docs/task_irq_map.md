@@ -294,7 +294,7 @@ fix). The GT side for the mask mapping is already in place (stage 1 in `plan_256
   So the shipped relocation provides a healthy **≤32** extension (no mask change needed), but its
   "up to 64" claim is wrong twice: the mask path cannot represent >32, and the build stalls ≥48.
 
-### 3.3 Option A (recommended): finish the B block (255 voices)
+### 3.3 Option A (recommended): finish the B block (255 voices = compromise cap, goal 256)
 
 Follow `plan_256.md` and `polyphony_256_todo.md` R2/R9/R12/R15/R17:
 - 32-byte current/pending mask arrays in page 6 (`MHI`/`PHI` in the plan: `0x3300`/`0x3320`),

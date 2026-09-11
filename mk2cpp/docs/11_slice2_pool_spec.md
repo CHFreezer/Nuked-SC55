@@ -1,13 +1,14 @@
 # 11 M4 slice-2 规格：voice pool-init + release/free 原生化
 
-> **暂缓（2026-09-11）**：本文的 N=255 口径（`pcm_ext_voices`、slot 255 哨兵、
-> 256-bit mask）随 256 扩展回滚**暂缓**。`src/hand/native_pool.cpp` 当前固定
-> `kLegacy=28`（`pool_post_reset` 不再读取 `pcm_ext_voices`）；pool-init/release/free
-> 的原生语义分析仍有效，重启须基于原版 28 复音。
+> **暂缓（2026-09-11）**：本文的 N=255 妥协上限口径（`pcm_ext_voices`、slot 255 哨兵、
+> 256-bit mask）随 256 扩展回滚**暂缓**（里程碑拆分后归 M5）。`src/hand/native_pool.cpp`
+> 当前固定 `kLegacy=28`（`pool_post_reset` 不再读取 `pcm_ext_voices`）；
+> pool-init/release/free 的原生语义分析仍有效（stock-28 部分属 M4），
+> 重启须基于原版 28 复音。
 
 状态：已评审 v1，2026-09-11。
 配套文档：[07 voice 语义](07_m4_voice_spec.md) · [09 hand 覆盖表与集成](09_m4_integration.md) · [10 验收 oracle](10_m4_oracle.md) · [00 计划](00_plan.md)。
-口径：验收统一 `-voices:255`（"256 复音"指容量；slot 255 保留 `0xff` 哨兵，活性上限 255）；
+口径：目标 = **256 声同时发音**；验收上限 `-voices:255` 是 `0xff` 哨兵 + 8-bit 池计数妥协下的**阶段性上限，非最终目标**（07 §0.5）；
 slice-2 限定 **L0**（一次 `MK2CPP_Step` = 恰好一条 H8 指令）；整例程 hook（L1）在 n=28
 null 通过前不得启用，且首个 L1 用例只能是全 IML=7 的 `mask_acc 0x1ad3`（09 §4.3）。
 基线：HEAD `84d3e51`；L0 首切片 `mk2cpp/src/hand/pcm_enable.cpp` 与 oracle
@@ -38,7 +39,7 @@ null 通过前不得启用，且首个 L1 用例只能是全 IML=7 的 `mask_acc
   `MOVG2 (dp,0xd1a4) r1; AND #0x01 r1; EXTU r1`（`0x1d9b-0x1da2`、`0x1dd6-0x1ddd`）。
   ⇒ 数组只有 **2 项**，索引 = `(dp,0xd1a4) & 1`（双缓冲/半区选择），与 slot 无关。
 - 另有直接基址清零 `(dp,0xd1a6)`/`(dp,0xd1a7)`/`(dp,0xd1a8)`：`0x406fb/0x406ff/0x40703`（`dasm:12799-12803`）与 `0x46640`（`dasm:16555`），说明它是若干字节的全局小缓冲。
-- 结论：`polyphony_255_feasibility.md:83` 的「[I] per-voice」被索引计算直接推翻；N=255 不会把 slot 别名进该数组。
+- 结论：`polyphony_256_feasibility.md:83` 的「[I] per-voice」被索引计算直接推翻；N=255 不会把 slot 别名进该数组。
 
 **d1ac：Strongly supported，固定 32 项、非 slot 索引；残留下标出处待审计。**
 - 复位：`0x43318 movi r1 #0xd435; 0x4331b movi r0 #0x1f; 0x4331e CLR r1++; 0x43320 cntjmp` 清 `d435[32]`（写-only）；`0x43323 movi r1 #0xd1ac; 0x43326 movi r0 #0x1f; 0x43329 MOVG #4 -> r1++; cntjmp` 填 `d1ac[32]`（`dasm:13864-13876`）。
@@ -140,7 +141,7 @@ null 通过前不得启用，且首个 L1 用例只能是全 IML=7 的 `mask_acc
 ```cpp
 namespace mk2c {
 
-constexpr int kVoicesMax = 256;   // 容量；slot 255 = 0xff 哨兵，活性上限 255
+constexpr int kVoicesMax = 256;   // 容量；slot 255 = 0xff 哨兵，活性 255（妥协上限）
 constexpr int kLegacy    = 28;    // 页 0 镜像窗口（stock ROM 可见域）
 
 struct Pool {
@@ -535,7 +536,7 @@ L1 机制若同期开发（host 协议 + mask_acc 验证）另计 ~1–1.5 人�
 - d1a6/d1ac：`dasm:3240/3279`；`dasm:13866-13876/13994-14116/14129-14135`；rom2 fileoff `0x3695/0x36a3/0x36c3/0x36d5`。
 - acf2：`dasm:5667/5737`；写者 `dasm:2893-2906`；调用 `dasm:11341/11412`。
 - 0x42b8a：`dasm:13478-13482`；调用 `dasm:13294`。
-- 0x15d1：`dasm:2142-2148`；R18：`polyphony_256_todo.md:149-158`；碎片表 `polyphony_255_feasibility.md:198-228`。
+- 0x15d1：`dasm:2142-2148`；R18：`polyphony_256_todo.md:149-158`；碎片表 `polyphony_256_feasibility.md:198-228`。
 - 地址模型：`src/mcu.cpp:657`（sram static）、`:707-709`（page0 <0x8000→rom1）、`src/mcu.h:208-215`（页寄存器）；`src/mcu_opcodes.cpp:571-580`（disp16）、`:887/911/1000`（ex_ignore）、`:779-800`（MOVS）。
 - 表容量：`mk2cpp/src/mk2cpp.cpp:31,64-78,103-115`；T 检查：`:136-140`；PostReset 占位：`:279-284`。
 - 验收：`mk2cpp/docs/10_m4_oracle.md` §2；`mk2cpp/tests/m4_audio_null.ps1:41-69`；现状 hash：`mk2cpp/out/m4/audio_null/*.state.hash`（stock==m4 无 diff）。

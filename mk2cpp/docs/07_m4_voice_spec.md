@@ -3,19 +3,21 @@
 > **暂缓（2026-09-11）**：本文描述的 256 复音扩展（`pcm_ext_*`/`-voices:`/0xE800 窗口/
 > `PCM_MAX_VOICE`/效果槽外置）已从 `src/` 回滚到原版 28 复音实现。本文的 voice 语义
 > 分析（slot/哨兵/pool 闭包）仍有效，但涉及 N>28、256-bit mask、`0xE800`、page6 的
-> 设计**暂缓**；重启 M4 须基于原版 28 复音重新评估。
+> 设计**暂缓（里程碑拆分后归 M5，见 `00_plan.md` §2）**；不依赖扩展的 stock-28 语义
+> 部分仍属 M4，重启时须基于原版 28 复音重新评估。
 
 状态：已评审 v1，2026-09-11（勘误更新：slice-2 规格 [11](11_slice2_pool_spec.md) 修正
 §0.4/§0.10/§1.2/§2.3/§2.4/§3.1/§3.2/§4.1/§4.2 的命名与归属，逐条见 §6）。
 配套文档：[08 PCM 引擎与音频路径](08_m4_pcm_api.md) · [09 hand 覆盖表与集成](09_m4_integration.md) · [10 验收 oracle](10_m4_oracle.md) · [11 slice-2 pool 规格](11_slice2_pool_spec.md) · [00 计划](00_plan.md)。
 阅读顺序：00_plan §M4 → **07（voice 语义）** → 08（PCM/音频）→ 09（集成/分派）→ 10（验收）。
-口径：验收统一 `-voices:255`（"256 复音"指容量；slot 255 保留 `0xff` 哨兵，活性上限 255）；
+口径：目标 = **256 声同时发音**；验收上限 `-voices:255` 是 `0xff` 哨兵 + 8-bit 池计数
+妥协下的**阶段性上限，非最终目标**（§0.5）；
 前期限定 L0（一次 `MK2CPP_Step` = 恰好一条 H8 指令），整例程 hook（L1）在 n=28 null 通过前不得启用（09 §4.3）。
 
 范围：`mk2cpp/src/hand/` 原生 voice/PCM 子系统替换 `mk2cpp/src/gen/` 对应块。
 行号口径：评审基线 HEAD `84d3e51`；引用 GT/mk2cpp 行号在实现推进后可能漂移。
 只读来源：`tools/docs/`（voice_memory_map / voice_bounds_inventory / task_irq_map /
-mk2_polyphony_256 / polyphony_255_feasibility / polyphony_256_todo）、
+mk2_polyphony_256 / polyphony_256_feasibility / polyphony_256_todo）、
 `tools/baselines/dasm_full.txt`（行号）、GT `src/`（行号）、mk2cpp 架构（README/01/02/03）。
 
 置信度标记按 `tools/docs/evidence_protocol.md` §12：**C**=ROM+src 证实；
@@ -45,10 +47,15 @@ mk2_polyphony_256 / polyphony_255_feasibility / polyphony_256_todo）、
    页 0 SRAM**——part 代码通过 `(dp,0xa1e2)` 持有的是 per-part 0x70 记录指针
    （表 ROM1 `0x1bfe`，见 11 §1.2），**不是 note 描述符指针**；note 描述符池 `a2xx`
    可原生化/迁 page6（§4.2）。描述符池扩容到 N 的 9 个数组约 2.3 KB（§4.2）。
-5. **容量 256 与验收 255**：所有 slot 哨兵是 `0xff`（voice_bounds_inventory §4.1 第 7 条；
-   R12），数组可用 **256** 项但 **slot 255 必须保留为哨兵**，实际最大 255 声；
-   GT `PCM_MAX_VOICE=255`、`PCM_SLOTS=260`（`src/pcm.h:27-29`）与此一致。M4 验收统一
-   `-voices:255`，容量为 `std::array<Voice,256>`、活性上限 255（§5 R3；是否扩到 256 见待定项）。
+5. **目标 256 声与妥协上限 255**：工程目标始终是 **256 声同时发音**（项目名即 256 复音）。
+   **255 不是目标数字**，而是两个实现约束的妥协产物：①所有 slot 哨兵是 `0xff`
+   （voice_bounds_inventory §4.1 第 7 条；R12），**slot 255 必须保留为哨兵**；
+   ②池计数 `a42d` 为 8-bit，回绕上限 255（`polyphony_256_todo.md` R12）。
+   因此本设计数组可用 **256** 项但活性上限 255（`std::array<Voice,256>`，§5 R3）；
+   GT `PCM_MAX_VOICE=255`、`PCM_SLOTS=260`（`src/pcm.h:27-29`）与之对齐。验收统一
+   `-voices:255` 只是"验到当前妥协上限"，**非目标**；真 256 所需的设计变更
+   （哨兵表示/计数加宽/数组 ≥264/EFF 260..263/CLI 放开）见 `10_m4_oracle.md` D1
+   与 `08_m4_pcm_api.md` P2。
 6. **PCM 边界**：voice 参数写继续走 GT `PCM_Write(0xE000|reg)` 可保 bit 级行为；
    但效果簇的 `select_channel=0x1c..0x1f` 与 voice slot 28..31 在扩展模式会冲撞
    （`src/pcm.cpp:131-152`）。建议新增**原生 PCM voice 参数 API**绕过 select 寄存器
@@ -218,7 +225,7 @@ rom2 搜索 D1 0x45cbe ◄── 4 个 IRQ 上下文直接可达（无 jsr）
 - 页 0 SRAM 窗口只有 `0x8000-0xdfff`（24 KB，`src/mcu.cpp:703,737`）；
   page6 `b_ram` 64 KB 已在 GT（`src/mcu.cpp:658,843-846,1064`）。
 - 结论：**N>28 时任何 ROM 侧的 per-voice 数组访问都不可能寻址到扩容区**；
-    hand 原生化是唯一出路（polyphony_255_feasibility §2.1/2.3）。
+    hand 原生化是唯一出路（polyphony_256_feasibility §2.1/2.3）。
 
 ### 2.2 AoS — 28 × 0x12a voice 结构（C）
 
@@ -617,11 +624,11 @@ void PCM_AckVoiceIrq(void);                      // = PCM_Read(0x3E)
 |---|---|---|---|
 | R1 | **L1 段内不轮询中断**导致 FRT2/FRT3/MIDI 延迟 = hand 段时长；中断延迟可能改变时序（L0 无此风险） | ROM 在这些例程内已 IML=7 或行为对延迟不敏感 | L1 仅限 IML=7 短例程（09 §4.3）；n=28 先做 A/B trace（默认 vs hand）；O2/O3（isr≈1382、pc=0492） |
 | R2 | 周期记账用「指令数×12」下界，未含未执行臂/分支惩罚（GT 本身也为平坦 12，`src/mcu.cpp:1457`） | ROM 全臂指令数可静态枚举（h8lift 输入 map 已有 15999 PC） | 用 `mk2cpp/out/h8part/map.csv` 取全臂数，替换 §1 下界；对上 O5 的 cycle 窗口 |
-| R3 | **256 vs 255**：`0xff` 哨兵占 slot 255；GT `PCM_MAX_VOICE=255`（`src/pcm.h:27`） | 有效 N≤255；`std::array<Voice,256>` 仅容量 | `-voices:255` 长跑；slot 255 永不分配（alloc 断言） |
+| R3 | **目标 256 vs 妥协上限 255**：`0xff` 哨兵占 slot 255；GT `PCM_MAX_VOICE=255`（`src/pcm.h:27`） | 阶段性有效 N≤255（非最终目标）；`std::array<Voice,256>` 仅容量；真 256 需改哨兵/计数（10 D1） | `-voices:255` 长跑（验到妥协上限）；slot 255 永不分配（alloc 断言） |
 | R4 | 效果 `0x3e` 冲突（§4.4） | 新增原生 PCM API 可零补丁解决 | 加 API 后默认路径 0-diff（200-202M trace）；`-voices:64` 下效果听感对照 |
 | R5 | `0x5998 coeff_calc` 等定点数学重写错漏 → 音色/音量静默偏差；其 ROM 表（`0x7218/0x9740/0x9060`）在 ROM 页，C++ 可读 | 逐位移植 + int16/int32 语义（MULXU/DIVXU 饱和规则） | 单 slot 对照：同输入下 ROM 执行 vs hand 的 `P+0x86..0x96` 逐字节相等（co-sim 微测试） |
 | R6 | **C7 `0x272e`/C16 区间上界**未精确到指令（rts 位置仅按 trace 推断） | 用全臂反汇编（h8dasm + map）钉死区间的 rts/入口 | 重跑 h8dasm 全 ROM 静态反汇编该区间；flow_main 前驱验证 |
-| R7 | part 记录区 `[0x8048,0x8718)` 与页 0 24KB 预算；`(dp,0xa1e2)` 是 part 记录指针（11 §1.2） | 记录区必须留 SRAM；`a2xx` 描述符池 2304B 可原生化/迁 page6 | 静态占用图（同 polyphony_255 §2.1 方法） |
+| R7 | part 记录区 `[0x8048,0x8718)` 与页 0 24KB 预算；`(dp,0xa1e2)` 是 part 记录指针（11 §1.2） | 记录区必须留 SRAM；`a2xx` 描述符池 2304B 可原生化/迁 page6 | 静态占用图（同 polyphony_256 §2.1 方法） |
 | R8 | **`0x0f86` 外部调用者缺失**（flow_main 无静态边） | 事件/指针分派；hand 接管入口仍正确（入口 PC 是分派目标） | `-tracepc` 在 note 事件处抓实际进入 PC；静态扫描 `jsr/jmp rN` 注册表 |
 | R9 | `PCM_Update` 256 voice ~9× DSP（`src/pcm.cpp:587,1164,1672`） | 现代 CPU 可承受，或需要 native 混音降载 | 实测占空比；O2 心跳维持 |
 | R10 | `d15c` 溢出：IRQ0 若仍留 ROM，`&0x1f` 对 slot≥32 会写错 entry（`0x052D`） | hand 接管 IRQ0（本规格默认） | O7；n=64 时注入 slot 40 结束事件，检查 `irq_pend[40]` |
@@ -678,7 +685,7 @@ B6（`d1ac` 未执行调用点下标出处）、B7（`acf2` 与 C9 的成对性�
   `src/mcu_opcodes.cpp:571-580`（disp16 寻址）、`:311-314,345-349`（rts/ret）、
   `:1011-1039`（BSET/BCLR）、`:1041-1079`（MOVG 状态）；调度见 `src/mcu.cpp:1444-1457`。
 - docs：voice_memory_map §1-§9；voice_bounds_inventory §1.1-§4；task_irq_map §0-§4；
-  mk2_polyphony_256 §6.3-§6.6；polyphony_255_feasibility §1-§6；
+  mk2_polyphony_256 §6.3-§6.6；polyphony_256_feasibility §1-§6；
   polyphony_256_todo R11/R12/R15/R16/R17/R18。
 - `flow_main.txt` 直接调用边见 §1 各行（如 `00001106→00000f86`、`00005346→0000546e`）。
 

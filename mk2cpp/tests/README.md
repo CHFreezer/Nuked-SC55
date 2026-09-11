@@ -19,7 +19,7 @@ completed trace window and then force-kills the process. It is pure PowerShell
 | Script | Purpose | Real GT run? |
 |---|---|---|
 | `m4_audio_null.ps1` | n=28 audio null: stock vs `-mk2cpp`（`-voices:28` 已回滚为 no-op，等价默认 28；`[300M,320M)` WAV payload / `-audiohash` / state scalars）；可选 `-HandOff` 同二进制 A/B | only with `-Execute -UserPresent` |
-| `m4_stress_voices.ps1` | ~~n=32/64/128/255 矩阵~~ **暂缓**（`-voices:` 已回滚）；原 S1-S7 解析与 O1-O10 映射（`cfg3d=0x7b` + `pcm.ext_voices=n`）随 256 扩展暂缓 | 暂缓 |
+| `m4_stress_voices.ps1` | ~~n=32/64/128/255 矩阵（255 = 妥协上限，目标 256）~~ **暂缓**（`-voices:` 已回滚）；原 S1-S7 解析与 O1-O10 映射（`cfg3d=0x7b` + `pcm.ext_voices=n`）随 256 扩展暂缓 | 暂缓 |
 | `two_mode_check.ps1` | M1-M3 default-path regression (trace/hash, `SDL_*_DRIVER=dummy`) | headless by design, unchanged |
 
 Hard boundaries for the M4 scripts:
@@ -223,8 +223,10 @@ only; every implemented option must be advertised there.
    `PCM_WriteExt` and ext reads (`0xE820`). Optional: O5 works without it, but
    O6/S6-ext/S7 are then SKIP.
 
-Accepted voice count is `-voices:255` (CLI range `28..255`, capacity 256); the
-oracle never asks for `-voices:256`.
+The project goal is **256 sounding voices**; the accepted oracle voice count is
+`-voices:255` (CLI range `28..255`) - the compromise cap forced by the `0xff`
+slot sentinel and the 8-bit pool counter, not the goal itself. The oracle never
+asks for `-voices:256` until that design change (D1) is approved.
 
 ## Exit codes
 
@@ -254,10 +256,11 @@ oracle never asks for `-voices:256`.
 - No real GT run was performed in this wave: the M4 scripts are dry-run
   validated only. They need GT options G1/G2/G3/G5 (above) and the local corpus
   before `-Execute` can pass its gate.
-- `-voices:256` remains a CLI cap decision (D1): the accepted oracle wording is
-  `255`; the 255/256 split is not a conflict (active cap vs slot capacity,
-  `out/m4/12_cfg3d_voice_count.md` §5.2). If the cap is ever raised,
-  `-VoiceLevels` and the S4 expectation need revisiting.
+- `-voices:256` remains a CLI cap decision (D1): the goal is 256 voices, but
+  the current compromise cap is `255` (`0xff` sentinel + 8-bit counter,
+  `out/m4/12_cfg3d_voice_count.md` §5.2); the oracle uses `255` until the
+  true-256 design change lands. If the cap is ever raised, `-VoiceLevels` and
+  the S4 expectation need revisiting.
 - D6 (`config_reg_3d` bit5 vs voice count) is resolved by plan A
   (2026-09-11, `out/m4/12_cfg3d_voice_count.md`): extension levels must keep
   `cfg3d=0x7b` and report `pcm.ext_voices=n` via `-snapinfo` (`-hashdump` stays

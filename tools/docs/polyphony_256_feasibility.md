@@ -1,4 +1,9 @@
-# Nuked-SC55 mkII — 255-voice feasibility study (research-only, no source modified)
+# Nuked-SC55 mkII — polyphony feasibility study (target 256; 255 = compromise cap; research-only, no source modified)
+
+> **口径修订（2026-09-11）**：项目目标 = **256 声同时发音**；本文研究的 **N=255**
+> 是 `0xff` 哨兵 + 8-bit 池计数妥协下的阶段性上限，**非最终目标**。文中所有
+> “255-voice / 目标 N=255”表述均按“妥协上限”理解；真 256 需额外的哨兵表示/
+> 计数宽度变更（见 `plan_256.md`、`polyphony_256_todo.md` R12/R14）。
 
 Status: research deliverable, 2026-09-11. All claims cite T0 ROM bytes / GT `src/`
 lines, T1 snapshots, or T2/T3 docs (`voice_memory_map.md`, `voice_bounds_inventory.md`,

@@ -1,6 +1,8 @@
-# mk2cpp 计划（M1–M4）
+# mk2cpp 计划（M1–M5）
 
-状态：M1 ✅ M2 ✅ M3 ✅（2026-09-11）；M4 暂缓（256 复音扩展已回滚 2026-09-11）。
+状态：M1 ✅ M2 ✅ M3 ✅（2026-09-11，直译）；M4 语义化改写（stock 28）待重启；
+M5（256 复音扩展）已回滚暂缓（2026-09-11）。里程碑口径：M4 = ROM 全量 C++ 翻译的
+语义层收尾；M5 = 在翻译目标之外新增 256 复音能力的研究。
 依据：`../tools/docs/`（证据协议、voice_memory_map、voice_bounds_inventory、
 task_irq_map、polyphony_256_todo）。
 
@@ -10,9 +12,10 @@ task_irq_map、polyphony_256_todo）。
 - **不翻译**：采样/波形 ROM（数据引擎输入）、GT 设备模型（PCM/定时器/LCD/ADC 等，
   以宿主 API 复用，不重写行为）。
 - **终态**：GT 的 `-mk2cpp` 模式（`mk2cpp.h` 库）用翻译后的 C++ 跑同一 ROM 场景，
-  行为与默认解释器模式等价。**当前聚焦原版 28 复音固件的 C++ 翻译（M1–M3 直译已达成）。**
-  M4 计划对 voice/PCM 做语义化改写并支持 256 复音，但 **256 扩展已于 2026-09-11 回滚，
-  M4 暂缓**。
+  行为与默认解释器模式等价。**当前聚焦原版 28 复音固件的 C++ 翻译**：
+  M1–M3 直译已达成；**M4** 对 voice/PCM 做语义化改写（stock 28，待重启），
+  完成全量翻译目标；**M5** 的 256 复音扩展是在此之上的独立能力研究，
+  已于 2026-09-11 回滚暂缓（见 §2）。
   **不产出独立可执行程序。**
 
 ## 1. 方法与边界
@@ -22,8 +25,9 @@ task_irq_map、polyphony_256_todo）。
 1. **直译层（M1–M2，`src/gen/`）**：按基本块生成 C++，内存模型/标志/周期与 GT
    完全一致（`uint8_t mem`、页映射、`cycles += 12`、SR 位语义照抄
    `../src/mcu_opcodes.cpp`）。目标是 **0 分歧**，不是"好看"。
-2. **语义层（M4，`src/hand/`）**：对 voice 子系统与 PCM 编程做可读重写
-   （真正的结构体/256 数组/原生 API），并用 co-sim 保证可观测行为等价。
+2. **语义层（M4，`src/hand/`）**：对 stock 28 的 voice 子系统与 PCM 编程做可读重写
+   （原生结构体/API），并用 co-sim 保证可观测行为等价；256 数组/扩展 API 属 M5
+   （已回滚暂缓）。
 
 **混合运行**：未翻译的 PC 由 GT 解释器兜底（同一进程内），保证始终可运行、
 覆盖率可逐步提升；到达 100% 执行集后再移除兜底。
@@ -85,44 +89,62 @@ oracle：demo 200M 窗口 0 分歧；boot 3M 0 分歧。
 oracle：`s` 行 SM trace 与 GT 逐条一致（两模式 + 基线）；LCD 渲染与 GT 相同帧序列
 （`hash.lcd_state` 一致）。**已达成。**
 
-### M4 语义化 + 255 复音（容量 256）— 暂缓（2026-09-11 回滚 256 扩展）
+### M4 语义化改写（stock 28）— 待重启
 
-> **回滚说明（2026-09-11）**：256 复音扩展（`pcm_ext_*` 全局、`-voices:<n>`、
-> 0xE800 扩展窗口、page6/7 backing、`PCM_MAX_VOICE`/`PCM_EFF_BASE`/`PCM_SLOTS`、
-> 效果槽外置）已从 `src/` 回滚到原版 28 复音实现（对齐 `9c98ab9` 的 PCM 语义）。
-> 本节及 `docs/07–11` 描述的是**扩展模式的设计**，现为**暂缓记录**；
-> M4 语义化改写（`src/hand/`）若要重启，须基于原版 28 复音重新评估范围。
-> 当前 `src/hand/pcm_enable.cpp` 的 6 个 L0 覆盖只翻译 stock 28 的 PCM
-> enable/disable flush（不依赖任何 256 扩展），`native_pool.cpp` 固定用
-> `kLegacy=28`。
+> **里程碑拆分（2026-09-11）**：原 M4 把「voice/PCM 语义化改写」与「256 复音扩展」
+> 捆在一起。现拆分：**M4 = stock 28 的语义化改写，属 ROM 全量 C++ 翻译的收尾**；
+> **M5 = 256 扩展，属翻译目标之外的独立能力研究**（已回滚暂缓）。`docs/07–11`
+> 为混编记录：不依赖扩展的 stock-28 语义分析仍属 M4，涉及 N>28、256-bit mask、
+> `0xE800`、page6 的扩展设计随 M5 暂缓。当前 `src/hand/pcm_enable.cpp` 的 6 个 L0
+> 覆盖只翻译 stock 28 的 PCM enable/disable flush（不依赖任何 256 扩展），
+> `native_pool.cpp` 固定用 `kLegacy=28`。
 
 交付分层：
 - **M4a 控制语义化**：`src/hand/` 把 voice/PCM 控制路径原生化（固件寄存器写 →
   typed API/原生状态），DSP 仍用 GT `PCM_Update`；n=28 音频 null 先通过。
 - **M4b DSP 移植**：逐行机械移植 `PCM_Update` 定点步骤（20 位量化/`nfs`/浮点分支），
   用音频 tap 做逐样本对拍。
-- **M4c 255 优化**：inactive voice 跳过/批处理（须证明与全跑等价），`-voices:255`
-  实时性达标。
 
-切片顺序（详见 `09_m4_integration.md` §5.5）：PCM enable/disable flush → pool-init →
-alloc/free（**slice-2**）→ per-voice materialize/PCM 写路径 → …；前期限定 L0（一次
-`MK2CPP_Step` = 恰好一条 H8 指令），整例程 hook（L1）在 n=28 null 通过前不得启用。
-slice-2 规格见 `11_slice2_pool_spec.md`：pool-init 可被中断（boot 实测 2 次 FRT2）**必须
-L0**；L1 首个用例只用全 IML=7 的 `mask_acc 0x1ad3`；命名勘误——`0x1823/0x187e` 是
-release 而非 alloc（分配器 = `pool_pop 0x19ad` + `link 0x194c`），`a3a0 0x94` 是 free
-标记、`a368` 是 slot→part。
+切片顺序（详见 `09_m4_integration.md` §5.5；重启时按 stock 28 复核）：PCM enable/disable
+flush → pool-init → alloc/free（**slice-2**）→ per-voice materialize/PCM 写路径 → …；
+前期限定 L0（一次 `MK2CPP_Step` = 恰好一条 H8 指令），整例程 hook（L1）在 n=28 null
+通过前不得启用。slice-2 规格见 `11_slice2_pool_spec.md`：pool-init 可被中断（boot 实测
+2 次 FRT2）**必须 L0**；L1 首个用例只用全 IML=7 的 `mask_acc 0x1ad3`；命名勘误——
+`0x1823/0x187e` 是 release 而非 alloc（分配器 = `pool_pop 0x19ad` + `link 0x194c`），
+`a3a0 0x94` 是 free 标记、`a368` 是 slot→part。
 
 依赖（Wave 0）：
 - 集成骨架：hand 独立稀疏 override 表 + `MK2CPP_Configure/PostReset`（`09`）；
 - 音频 tap：`-wav:`/`-audiowin`/`-audiohash` 与 `-snapinfo`（`08`/`10`）；
-- 音频基线冻结（stock 300M–320M）与 ≥255 同时音 MIDI 素材（**待办，需用户**，`10` §6）。
+- 音频基线冻结（stock 300M–320M）（**待办，需用户**，`10` §6）；≥255 同时音 MIDI
+  素材属 M5。
 
-oracle（口径与 `10_m4_oracle.md` 一致；**256 相关项随扩展回滚暂缓**）：
+oracle：
 - n=28：与 stock 音频输出 null 测试（容差 0 或书面量化误差）——**仍有效**；
-- ~~`-voices:255`（"256 复音"指容量）：长跑稳定、无复位、PCM 激活、CPU 占空比合理；
-  压力矩阵 n=32/64/128/255~~ **暂缓**（`-voices:` 已回滚）；
-- 与 `../tools/docs/task_irq_map.md` §4 的 O1–O10 验收矩阵一致；
+- 与 `../tools/docs/task_irq_map.md` §4 的 O1–O10 验收矩阵一致（扩展相关项随 M5 暂缓）；
 - 音频/听感窗口 ≥300M，状态 ≥200M；超时 = ceil(终点/24e6×2)+15s。
+
+### M5 256 复音扩展（目标 256 声；现行妥协上限 255）— 暂缓（2026-09-11 回滚）
+
+> **回滚说明（2026-09-11）**：256 复音扩展（`pcm_ext_*` 全局、`-voices:<n>`、
+> 0xE800 扩展窗口、page6/7 backing、`PCM_MAX_VOICE`/`PCM_EFF_BASE`/`PCM_SLOTS`、
+> 效果槽外置）已从 `src/` 回滚到原版 28 复音实现（对齐 `9c98ab9` 的 PCM 语义）。
+> `docs/07–11` 描述的是**扩展模式的设计**，现为**暂缓记录**；重启须基于原版
+> 28 复音重新评估范围。
+
+口径：**目标 = 256 声同时发音**；`-voices:255` 是 `0xff` 哨兵 + 8-bit 池计数
+妥协下的阶段性上限，**非最终目标**（真 256 所需变更见 `10` D1）。
+
+交付：
+- **M5a 容量扩展**：按 `docs/07–11` 落地 `pcm_ext_*`/`-voices:n`/0xE800 窗口/
+  page6-7/256-bit mask 等设计。
+- **M5b 容量 256 优化**：inactive voice 跳过/批处理（须证明与全跑等价）；阶段验收在
+  妥协上限 `-voices:255` 实时达标，**最终目标 256 声**。
+
+oracle（随扩展暂缓）：
+- `-voices:255`（目标 256 声；255 = 妥协上限）：长跑稳定、无复位、PCM 激活、
+  CPU 占空比合理；压力矩阵 n=32/64/128/255（`tests/m4_stress_voices.ps1`）；
+- ≥255 同时音 MIDI 素材与注入通道（**待办，需用户**，`10` §6）。
 
 设计文档：`07_m4_voice_spec.md`（voice 语义）、`08_m4_pcm_api.md`（PCM/音频）、
 `09_m4_integration.md`（覆盖表/开关矩阵）、`10_m4_oracle.md`（验收 oracle）、
