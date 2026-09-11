@@ -28,7 +28,7 @@ mk2cpp/
   tools/h8lift/        ROM → C++ 反译器（入库）
   tools/tracediff/     两模式 trace/状态差分（入库）
   tools/cover/         覆盖率仪表盘（入库）
-  docs/                设计与约定（00_plan / 01_architecture / 02_conventions / 03-06 研究）
+  docs/                设计与约定（00–11：00_plan / 01_architecture / 02_conventions / 03–06 研究 / 07–11 M4 设计）
   tests/               oracle 脚本（入库）；语料/快照本地
   out/                 运行/中间产物（不入 git）
 ```
@@ -78,6 +78,6 @@ cmake --build build
 | M1 ✅ | `mk2cpp.h` 集成（`-mk2cpp` + 混合回退）+ h8lift（h8dec/h8part/h8emit）+ tracediff + cover + hashdump | **已达成（2026-09-11）**：9217 PC 注册；boot 0–3M 与 demo 200–202M 两模式 trace + 状态哈希 + 基准 trace 全部一致 |
 | M2 ✅ | 主固件全执行面翻译（含未执行可达路径） | **已达成（2026-09-11）**：15999 PC（9217 执行集 + 6782 可达新增）全译、0 stub（13 处 `TODO(gt)`）；boot+demo200 两模式 trace + 状态哈希与 M1 基线一致 |
 | M3 ✅ | 子 MCU 固件翻译（`smemit` 全译 rom_sm 4KB）+ SM/主 CPU 5× 时序对接 | **已达成（2026-09-11）**：4096 SM PC 全译；boot+demo200 两模式 `s` 行 SM trace 逐条一致、hashdump 与 M1 基线同哈希（含 `hash.sm`/`sm_ram`/`hash.lcd_state`）；执行集（45/251 PC）全落翻译区间 |
-| M4 | voice/PCM 语义化改写 + 256 复音 | n=28 音频 null 测试；n=256 长跑稳定 |
+| M4 | voice/PCM 语义化改写 + 256 复音（容量） | n=28 音频 null；`-voices:255` 长跑稳定、无复位；oracle 与分层见 `docs/07–11`；slice-2（pool-init/release/free，L0）见 `docs/11` |
 
 详细设计见 `docs/00_plan.md`、`docs/01_architecture.md`、`docs/02_conventions.md`。

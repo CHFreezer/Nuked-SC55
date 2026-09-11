@@ -232,7 +232,9 @@ static const char *tracepc_file = nullptr;
 static uint64_t tracepc_start = 200000000, tracepc_end = 210000000;
 
 // (-pcmtrace): log PCM control-register writes (voice_enable 0x00-03, config
-// 0x3c/3d, select_channel 0x3e) with the H8 PC, to pcm_trace.log.
+// 0x3c/3d, select_channel 0x3e, 0x3f effect alias in extended mode), the
+// 0xE800 extension writes and the 0xE820/0xE821 extension reads with the H8
+// PC, to pcm_trace.log.
 static bool g_pcm_trace = false;
 
 // ---- unified PC trace (main + SM in ONE file), owned by the main MCU. ----
@@ -661,6 +663,37 @@ static uint8_t b_ram2[0x10000]; // polyphony extension: 64KB backing for H8 page
 
 int rom2_mask = ROM2_SIZE - 1;
 
+// (-pcmtrace) log helper shared by the stock window, the extension window and
+// extended reads. Line formats:
+//   stock write / 0x3f effect alias : "pcm reg=%02x val=%02x pc=%02x:%04x cyc=%llu"
+//   ext write                       : "pcm ext reg=%02x val=%02x pc=... cyc=..."
+//   ext read                        : "pcm ext read reg=%02x val=%02x pc=... cyc=..."
+// The ext-write line stays compatible with the m4_stress_voices.ps1 parser;
+// reads use a distinct line type so they are never mistaken for ext writes.
+static FILE *g_pcm_trace_f = nullptr;
+
+static void pcm_trace_log(uint32_t reg, uint8_t val, int ext, int read)
+{
+    if (!g_pcm_trace_f)
+    {
+        g_pcm_trace_f = fopen("pcm_trace.log", "w");
+        if (g_pcm_trace_f)
+            setvbuf(g_pcm_trace_f, NULL, _IONBF, 0);
+    }
+    if (!g_pcm_trace_f)
+        return;
+    if (ext)
+        fprintf(g_pcm_trace_f, read
+                ? "pcm ext read reg=%02x val=%02x pc=%02x:%04x cyc=%llu\n"
+                : "pcm ext reg=%02x val=%02x pc=%02x:%04x cyc=%llu\n",
+                (int)reg, (int)val, (int)mcu.cp, (int)mcu.pc,
+                (unsigned long long)mcu.cycles);
+    else
+        fprintf(g_pcm_trace_f, "pcm reg=%02x val=%02x pc=%02x:%04x cyc=%llu\n",
+                (int)reg, (int)val, (int)mcu.cp, (int)mcu.pc,
+                (unsigned long long)mcu.cycles);
+}
+
 static uint8_t MCU_Read_impl(uint32_t address)
 {
     uint32_t address_rom = address & 0x3ffff;
@@ -685,7 +718,12 @@ static uint8_t MCU_Read_impl(uint32_t address)
                 }
                 else if (pcm_ext_active && !mcu_jv880 && address >= 0xe800 && address < 0xe840)
                 {
-                    ret = PCM_ReadExt(address & 0x3f);
+                    uint32_t reg = address & 0x3f;
+                    ret = PCM_ReadExt(reg);
+                    // O7/S7 evidence: log the full IRQ slot read (0xE820) and
+                    // the ext-active probe (0xE821).
+                    if (g_pcm_trace && (reg == 0x20 || reg == 0x21))
+                        pcm_trace_log(reg, ret, 1, 1);
                 }
                 else if (!mcu_scb55 && address >= 0xec00 && address < 0xf000)
                 {
@@ -934,20 +972,15 @@ void MCU_Write(uint32_t address, uint8_t value)
                     if (g_pcm_trace)
                     {
                         uint32_t reg = address & 0x3f;
-                        if ((reg <= 3) || reg == 0x3c || reg == 0x3d || reg == 0x3e)
-                        {
-                            static FILE *tf = nullptr;
-                            if (!tf) { tf = fopen("pcm_trace.log", "w"); if (tf) setvbuf(tf, NULL, _IONBF, 0); }
-                            if (tf)
-                                fprintf(tf, "pcm reg=%02x val=%02x pc=%02x:%04x cyc=%llu\n",
-                                        (int)reg, (int)value, (int)mcu.cp, (int)mcu.pc,
-                                        (unsigned long long)mcu.cycles);
-                        }
+                        if ((reg <= 3) || reg == 0x3c || reg == 0x3d || reg == 0x3e || reg == 0x3f)
+                            pcm_trace_log(reg, value, 0, 0);
                     }
                     PCM_Write(address & 0x3f, value);
                 }
                 else if (pcm_ext_active && !mcu_jv880 && address >= 0xe800 && address < 0xe840)
                 {
+                    if (g_pcm_trace)
+                        pcm_trace_log(address & 0x3f, value, 1, 0);
                     PCM_WriteExt(address & 0x3f, value);
                 }
                 else if (!mcu_scb55 && address >= 0xec00 && address < 0xf000)
@@ -1403,6 +1436,425 @@ static void hashdump_write(const char *path)
     fclose(f);
 }
 
+// ============================================================================
+// M4 oracle capture (all options default off; zero behavior change without
+// them):
+//   -wav:<file>                 producer-side int16 stereo tap in MCU_PostSample
+//   -audiowin <start> <end>     capture only mcu.cycles in [start,end); at the
+//                               end cycle backfill the RIFF/data sizes, fclose,
+//                               then write <file>.meta (wavdump v1) last
+//   -audiohash <cycles> <file>  FNV-1a64 of the PostSample stream (repeatable)
+//   -midiseq <file> [start]     MIDI schedule via MCU_PostUART + backpressure
+//   -snapinfo <cycles> <file>   text scalars (isr4fe/sleep/iml/pend/...)
+//
+// Threading: the tap and all checkpoint writes run on work_thread only (the
+// PCM_Update caller); finalization on normal exit runs in main after the work
+// thread has been joined (atexit is the backstop). WAV writes use stdio full
+// buffering, so the real-time sample path is never flushed per sample.
+// ============================================================================
+
+static bool audio_capture_on = false; // any audio tap active (wav or hash)
+
+static const char *g_wav_path = nullptr;
+static FILE *g_wav = nullptr;
+static bool g_wav_windowed = false;
+static bool g_wav_window_closed = false;
+static bool g_wav_finalized = false;
+static uint64_t g_audio_win_start = 0;
+static uint64_t g_audio_win_end = 0;
+static int g_wav_rate = 66207;
+static uint64_t g_wav_pairs = 0;
+static uint64_t g_wav_first_cycle = 0;
+static uint64_t g_wav_last_cycle = 0;
+static uint64_t g_wav_fnv = fnv1a_basis;
+
+static const int AUDIO_HASH_MAX = 16;
+struct audio_hash_cp
+{
+    uint64_t cycles;
+    const char *file;
+    int done;
+};
+static audio_hash_cp g_audio_hash[AUDIO_HASH_MAX];
+static int g_audio_hash_n = 0;
+static uint64_t g_stream_pairs = 0;
+static uint64_t g_stream_fnv = fnv1a_basis;
+
+static bool g_snapinfo_on = false;
+static bool g_snapinfo_done = false;
+static uint64_t g_snapinfo_at = 0;
+static const char *g_snapinfo_file = nullptr;
+static uint64_t g_isr4fe = 0;
+
+struct midiseq_ev
+{
+    uint64_t cycle; // absolute (start + schedule cycle)
+    uint32_t off;
+    uint32_t len;
+};
+static midiseq_ev *g_midiseq_ev = nullptr;
+static uint32_t g_midiseq_n = 0;
+static uint32_t g_midiseq_cap = 0;
+static uint32_t g_midiseq_pos = 0;
+static uint8_t *g_midiseq_bytes = nullptr;
+static size_t g_midiseq_bytes_len = 0;
+static size_t g_midiseq_bytes_cap = 0;
+static const char *g_midiseq_file = nullptr;
+static uint64_t g_midiseq_start = 0;
+static bool g_midiseq_loaded = false;
+
+static void wav_put_u16le(FILE *f, uint16_t v)
+{
+    uint8_t b[2];
+    b[0] = (uint8_t)(v & 0xff);
+    b[1] = (uint8_t)((v >> 8) & 0xff);
+    fwrite(b, 1, 2, f);
+}
+
+static void wav_put_u32le(FILE *f, uint32_t v)
+{
+    uint8_t b[4];
+    b[0] = (uint8_t)(v & 0xff);
+    b[1] = (uint8_t)((v >> 8) & 0xff);
+    b[2] = (uint8_t)((v >> 16) & 0xff);
+    b[3] = (uint8_t)((v >> 24) & 0xff);
+    fwrite(b, 1, 4, f);
+}
+
+static void audio_hash_pair(uint64_t *h, int l, int r)
+{
+    uint8_t b[4];
+    b[0] = (uint8_t)(l & 0xff);
+    b[1] = (uint8_t)((l >> 8) & 0xff);
+    b[2] = (uint8_t)(r & 0xff);
+    b[3] = (uint8_t)((r >> 8) & 0xff);
+    *h = fnv1a64(*h, b, 4);
+}
+
+static void audio_capture_sample(int l, int r)
+{
+    g_stream_pairs++;
+    audio_hash_pair(&g_stream_fnv, l, r);
+
+    if (!g_wav)
+        return;
+    if (g_wav_windowed && (mcu.cycles < g_audio_win_start || mcu.cycles >= g_audio_win_end))
+        return;
+
+    uint8_t b[4];
+    b[0] = (uint8_t)(l & 0xff);
+    b[1] = (uint8_t)((l >> 8) & 0xff);
+    b[2] = (uint8_t)(r & 0xff);
+    b[3] = (uint8_t)((r >> 8) & 0xff);
+    fwrite(b, 1, 4, g_wav);
+    if (g_wav_pairs == 0)
+        g_wav_first_cycle = mcu.cycles;
+    g_wav_last_cycle = mcu.cycles;
+    g_wav_pairs++;
+    audio_hash_pair(&g_wav_fnv, l, r);
+}
+
+static void audio_dump_finalize(void);
+
+static void audio_dump_open(const char *path)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f)
+    {
+        printf("wavdump: cannot open %s\n", path);
+        fflush(stdout);
+        g_wav_path = nullptr;
+        return;
+    }
+    g_wav = f;
+    g_wav_pairs = 0;
+    g_wav_first_cycle = 0;
+    g_wav_last_cycle = 0;
+    g_wav_fnv = fnv1a_basis;
+    g_wav_window_closed = false;
+    g_wav_finalized = false;
+
+    // Canonical 44-byte PCM header; the RIFF size (offset 4) and data size
+    // (offset 40) are placeholders backfilled by audio_dump_finalize().
+    fwrite("RIFF", 1, 4, f);
+    wav_put_u32le(f, 36);
+    fwrite("WAVE", 1, 4, f);
+    fwrite("fmt ", 1, 4, f);
+    wav_put_u32le(f, 16);
+    wav_put_u16le(f, 1);                          // PCM
+    wav_put_u16le(f, 2);                          // channels
+    wav_put_u32le(f, (uint32_t)g_wav_rate);
+    wav_put_u32le(f, (uint32_t)g_wav_rate * 4u);  // byte rate = rate*2ch*2B
+    wav_put_u16le(f, 4);                          // block align
+    wav_put_u16le(f, 16);                         // bits per sample
+    fwrite("data", 1, 4, f);
+    wav_put_u32le(f, 0);
+
+    atexit(audio_dump_finalize);
+    printf("wavdump: opened %s (PCM s16le, 2ch, %d Hz)\n", path, g_wav_rate);
+    fflush(stdout);
+}
+
+static void audio_dump_finalize(void)
+{
+    if (g_wav_finalized)
+        return;
+    g_wav_finalized = true;
+    if (!g_wav)
+        return;
+
+    uint64_t data_bytes = g_wav_pairs * 4u;
+    if (fseek(g_wav, 4, SEEK_SET) == 0)
+        wav_put_u32le(g_wav, (uint32_t)(36u + data_bytes));
+    if (fseek(g_wav, 40, SEEK_SET) == 0)
+        wav_put_u32le(g_wav, (uint32_t)data_bytes);
+    fflush(g_wav);
+    fclose(g_wav);
+    g_wav = nullptr;
+
+    // <file>.meta (wavdump v1) is the deterministic completion marker and is
+    // only written when the -audiowin end cycle was actually reached.
+    if (!g_wav_windowed || !g_wav_window_closed)
+        return;
+
+    char meta_path[4096];
+    snprintf(meta_path, sizeof meta_path, "%s.meta", g_wav_path);
+    FILE *f = fopen(meta_path, "w");
+    if (!f)
+    {
+        printf("wavdump: cannot write %s\n", meta_path);
+        fflush(stdout);
+        return;
+    }
+    fprintf(f, "version = wavdump v1\n");
+    fprintf(f, "format = s16le\n");
+    fprintf(f, "channels = 2\n");
+    fprintf(f, "rate = %d\n", g_wav_rate);
+    fprintf(f, "start_cycles = %llu\n", (unsigned long long)g_audio_win_start);
+    fprintf(f, "end_cycles = %llu\n", (unsigned long long)g_audio_win_end);
+    fprintf(f, "first_cycle = %llu\n", (unsigned long long)g_wav_first_cycle);
+    fprintf(f, "last_cycle = %llu\n", (unsigned long long)g_wav_last_cycle);
+    fprintf(f, "sample_pairs = %llu\n", (unsigned long long)g_wav_pairs);
+    fprintf(f, "data_bytes = %llu\n", (unsigned long long)data_bytes);
+    fprintf(f, "payload_fnv1a = %016llx\n", (unsigned long long)g_wav_fnv);
+    fclose(f);
+    printf("wavdump: finalized %s (%llu pairs) and wrote %s\n",
+           g_wav_path, (unsigned long long)g_wav_pairs, meta_path);
+    fflush(stdout);
+}
+
+static void audio_hash_write(const audio_hash_cp *cp)
+{
+    FILE *f = fopen(cp->file, "w");
+    if (!f)
+    {
+        printf("audiohash: cannot open %s\n", cp->file);
+        fflush(stdout);
+        return;
+    }
+    fprintf(f, "version = audiohash v1\n");
+    fprintf(f, "requested_cycles = %llu\n", (unsigned long long)cp->cycles);
+    fprintf(f, "mcu.cycles = %llu\n", (unsigned long long)mcu.cycles);
+    fprintf(f, "sample_pairs = %llu\n", (unsigned long long)g_stream_pairs);
+    fprintf(f, "audio_fnv1a = %016llx\n", (unsigned long long)g_stream_fnv);
+    fclose(f);
+    printf("audiohash: c%llu pairs=%llu fnv1a=%016llx -> %s\n",
+           (unsigned long long)mcu.cycles, (unsigned long long)g_stream_pairs,
+           (unsigned long long)g_stream_fnv, cp->file);
+    fflush(stdout);
+}
+
+static void snapinfo_write(void)
+{
+    FILE *f = fopen(g_snapinfo_file, "w");
+    if (!f)
+    {
+        printf("snapinfo: cannot open %s\n", g_snapinfo_file);
+        fflush(stdout);
+        return;
+    }
+    uint32_t pend = 0;
+    for (int i = 0; i < INTERRUPT_SOURCE_MAX; i++)
+        if (mcu.interrupt_pending[i])
+            pend |= 1u << i;
+    uint32_t mask_pop = 0;
+    for (int i = 0; i < 32; i++)
+    {
+        uint8_t v = pcm.voice_mask[i];
+        while (v)
+        {
+            mask_pop += (v & 1u);
+            v >>= 1;
+        }
+    }
+    fprintf(f, "version = snapinfo v1\n");
+    fprintf(f, "requested_cycles = %llu\n", (unsigned long long)g_snapinfo_at);
+    fprintf(f, "mcu.cycles = %llu\n", (unsigned long long)mcu.cycles);
+    fprintf(f, "mcu.cp = %02x\n", (unsigned)mcu.cp);
+    fprintf(f, "mcu.pc = %04x\n", (unsigned)mcu.pc);
+    fprintf(f, "mcu.sr = %04x\n", (unsigned)mcu.sr);
+    fprintf(f, "isr4fe = %llu\n", (unsigned long long)g_isr4fe);
+    fprintf(f, "sleep = %u\n", (unsigned)(mcu.sleep ? 1 : 0));
+    fprintf(f, "iml = %u\n", (unsigned)((mcu.sr >> 8) & 7));
+    fprintf(f, "pend = %u\n", (unsigned)pend);
+    fprintf(f, "pcm.select_channel = %02x\n", (unsigned)pcm.select_channel);
+    fprintf(f, "pcm.irq_channel = %02x\n", (unsigned)pcm.irq_channel);
+    fprintf(f, "pcm.irq_assert = %u\n", (unsigned)pcm.irq_assert);
+    fprintf(f, "pcm.config_reg_3c = %02x\n", (unsigned)pcm.config_reg_3c);
+    fprintf(f, "pcm.config_reg_3d = %02x\n", (unsigned)pcm.config_reg_3d);
+    fprintf(f, "pcm.ext_voices = %d\n", pcm_ext_voices);
+    fprintf(f, "voice_mask_popcount = %u\n", (unsigned)mask_pop);
+    fclose(f);
+    printf("snapinfo: wrote %s at c%llu (isr4fe=%llu)\n", g_snapinfo_file,
+           (unsigned long long)mcu.cycles, (unsigned long long)g_isr4fe);
+    fflush(stdout);
+}
+
+static void audio_capture_poll(void)
+{
+    for (int i = 0; i < g_audio_hash_n; i++)
+    {
+        if (!g_audio_hash[i].done && mcu.cycles >= g_audio_hash[i].cycles)
+        {
+            audio_hash_write(&g_audio_hash[i]);
+            g_audio_hash[i].done = 1;
+        }
+    }
+    // The .meta marker is written last so its appearance means the WAV is
+    // already closed and complete.
+    if (g_wav_windowed && g_wav && !g_wav_window_closed && mcu.cycles >= g_audio_win_end)
+    {
+        g_wav_window_closed = true;
+        audio_dump_finalize();
+    }
+}
+
+static uint32_t midiseq_free_bytes(void)
+{
+    uint32_t occupied = (uart_write_ptr + uart_buffer_size - uart_read_ptr) % uart_buffer_size;
+    return uart_buffer_size - 1u - occupied;
+}
+
+static int midiseq_push_byte(uint8_t b)
+{
+    if (g_midiseq_bytes_len == g_midiseq_bytes_cap)
+    {
+        size_t ncap = g_midiseq_bytes_cap ? g_midiseq_bytes_cap * 2 : 4096;
+        uint8_t *nb = (uint8_t *)realloc(g_midiseq_bytes, ncap);
+        if (!nb)
+        {
+            fprintf(stderr, "midiseq: out of memory\n");
+            return 0;
+        }
+        g_midiseq_bytes = nb;
+        g_midiseq_bytes_cap = ncap;
+    }
+    g_midiseq_bytes[g_midiseq_bytes_len++] = b;
+    return 1;
+}
+
+static void midiseq_push_ev(uint64_t cycle, uint32_t off, uint32_t len)
+{
+    if (g_midiseq_n == g_midiseq_cap)
+    {
+        uint32_t ncap = g_midiseq_cap ? g_midiseq_cap * 2 : 256;
+        midiseq_ev *ne = (midiseq_ev *)realloc(g_midiseq_ev, (size_t)ncap * sizeof(midiseq_ev));
+        if (!ne)
+        {
+            fprintf(stderr, "midiseq: out of memory\n");
+            return;
+        }
+        g_midiseq_ev = ne;
+        g_midiseq_cap = ncap;
+    }
+    g_midiseq_ev[g_midiseq_n].cycle = cycle;
+    g_midiseq_ev[g_midiseq_n].off = off;
+    g_midiseq_ev[g_midiseq_n].len = len;
+    g_midiseq_n++;
+}
+
+// Parse the midisched text schedule: "<cycle> <hexbyte> [<hexbyte>...]" per
+// line, '#' starts a comment, blank lines ignored. Cycles are relative to the
+// -midiseq start argument.
+static void midiseq_load(const char *path)
+{
+    if (!path)
+        return;
+    FILE *f = fopen(path, "r");
+    if (!f)
+    {
+        fprintf(stderr, "midiseq: cannot open %s\n", path);
+        fflush(stderr);
+        return;
+    }
+    char line[1024];
+    uint32_t events = 0, bad = 0;
+    while (fgets(line, sizeof line, f))
+    {
+        char *p = line;
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (*p == '#' || *p == '\r' || *p == '\n' || *p == '\0')
+            continue;
+        char *end = nullptr;
+        unsigned long long rel = strtoull(p, &end, 10);
+        if (end == p)
+        {
+            bad++;
+            continue;
+        }
+        uint32_t off = (uint32_t)g_midiseq_bytes_len;
+        uint32_t cnt = 0;
+        while (*end)
+        {
+            while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')
+                end++;
+            if (*end == '\0' || *end == '#')
+                break;
+            char *bend = nullptr;
+            unsigned long v = strtoul(end, &bend, 16);
+            if (bend == end || v > 0xffu || !midiseq_push_byte((uint8_t)v))
+            {
+                bad++;
+                cnt = 0;
+                break;
+            }
+            cnt++;
+            end = bend;
+        }
+        if (cnt > 0)
+        {
+            midiseq_push_ev(g_midiseq_start + rel, off, cnt);
+            events++;
+        }
+    }
+    fclose(f);
+    g_midiseq_loaded = (g_midiseq_n > 0);
+    printf("midiseq: loaded %u event(s) from %s (start=%llu, %u malformed line(s) skipped)\n",
+           events, path, (unsigned long long)g_midiseq_start, bad);
+    fflush(stdout);
+}
+
+// Post the due schedule events. If the 8192-byte UART ring cannot hold a whole
+// event yet, postpone it and retry next instruction: unread bytes are never
+// overwritten.
+static void midiseq_poll(void)
+{
+    if (!g_midiseq_loaded)
+        return;
+    while (g_midiseq_pos < g_midiseq_n)
+    {
+        const midiseq_ev *e = &g_midiseq_ev[g_midiseq_pos];
+        if (mcu.cycles < e->cycle)
+            break;
+        if (midiseq_free_bytes() < e->len)
+            break;
+        for (uint32_t i = 0; i < e->len; i++)
+            MCU_PostUART(g_midiseq_bytes[e->off + i]);
+        g_midiseq_pos++;
+    }
+}
+
 int SDLCALL work_thread(void* data)
 {
     work_thread_lock = SDL_CreateMutex();
@@ -1448,6 +1900,10 @@ int SDLCALL work_thread(void* data)
 
         if (!mcu.sleep)
         {
+            // -snapinfo heartbeat: count instruction fetches at flat 00:04FE
+            // (the main event dispatcher epilogue, i.e. completed dispatches).
+            if (g_snapinfo_on && mcu.cp == 0x00 && mcu.pc == 0x04fe)
+                g_isr4fe++;
             if (mk2cpp_enabled && MK2CPP_CanStep(((uint32_t)mcu.cp << 16) | mcu.pc))
                 MK2CPP_Step();
             else
@@ -1540,6 +1996,15 @@ int SDLCALL work_thread(void* data)
             if (hashdump_file)
                 hashdump_write(hashdump_file);
             hashdump_done = 1;
+        }
+
+        // ---- M4 oracle injection/capture polls (no-ops by default) ----
+        midiseq_poll();
+        audio_capture_poll();
+        if (g_snapinfo_on && !g_snapinfo_done && mcu.cycles >= g_snapinfo_at)
+        {
+            snapinfo_write();
+            g_snapinfo_done = 1;
         }
 
         // if (mcu.cycles % 24000000 == 0)
@@ -1858,6 +2323,11 @@ void MCU_PostSample(int *sample)
     sample_buffer[sample_write_ptr + 0] = sample[0];
     sample_buffer[sample_write_ptr + 1] = sample[1];
     sample_write_ptr = (sample_write_ptr + 2) % audio_buffer_size;
+
+    // Producer-side tap: same post-gain/post-clamp int16 values that go into
+    // the ring (including the oversampling second PostSample). Off by default.
+    if (audio_capture_on)
+        audio_capture_sample(sample[0], sample[1]);
 }
 
 void MCU_GA_SetGAInt(int line, int value)
@@ -2028,6 +2498,82 @@ int main(int argc, char *argv[])
             {
                 g_pcm_trace = true;
             }
+            else if (!strncmp(argv[i], "-wav:", 5))
+            {
+                g_wav_path = argv[i] + 5;
+            }
+            else if (!strcmp(argv[i], "-audiowin"))
+            {
+                if (i + 2 < argc)
+                {
+                    uint64_t win_start = strtoull(argv[++i], 0, 10);
+                    uint64_t win_end = strtoull(argv[++i], 0, 10);
+                    if (win_end <= win_start)
+                    {
+                        fprintf(stderr, "warning: -audiowin %llu %llu invalid (end <= start), ignored\n",
+                                (unsigned long long)win_start, (unsigned long long)win_end);
+                    }
+                    else
+                    {
+                        g_audio_win_start = win_start;
+                        g_audio_win_end = win_end;
+                        g_wav_windowed = true;
+                    }
+                }
+                else
+                {
+                    fprintf(stderr, "warning: -audiowin requires <start> <end>, ignored\n");
+                }
+            }
+            else if (!strcmp(argv[i], "-audiohash"))
+            {
+                if (i + 2 < argc)
+                {
+                    if (g_audio_hash_n >= AUDIO_HASH_MAX)
+                    {
+                        fprintf(stderr, "warning: -audiohash limited to %d checkpoints, ignored\n", AUDIO_HASH_MAX);
+                        i += 2;
+                    }
+                    else
+                    {
+                        audio_hash_cp *cp = &g_audio_hash[g_audio_hash_n];
+                        cp->cycles = strtoull(argv[++i], 0, 10);
+                        cp->file = argv[++i];
+                        cp->done = 0;
+                        g_audio_hash_n++;
+                    }
+                }
+                else
+                {
+                    fprintf(stderr, "warning: -audiohash requires <cycles> <file>, ignored\n");
+                }
+            }
+            else if (!strcmp(argv[i], "-midiseq"))
+            {
+                if (i + 1 < argc)
+                {
+                    g_midiseq_file = argv[++i];
+                    if (i + 1 < argc && is_cycle_arg(argv[i + 1]))
+                        g_midiseq_start = parse_cycles(argv[++i]);
+                }
+                else
+                {
+                    fprintf(stderr, "warning: -midiseq requires <file> [start], ignored\n");
+                }
+            }
+            else if (!strcmp(argv[i], "-snapinfo"))
+            {
+                if (i + 2 < argc)
+                {
+                    g_snapinfo_at = strtoull(argv[++i], 0, 10);
+                    g_snapinfo_file = argv[++i];
+                    g_snapinfo_on = true;
+                }
+                else
+                {
+                    fprintf(stderr, "warning: -snapinfo requires <cycles> <file>, ignored\n");
+                }
+            }
             else if (!strcmp(argv[i], "-savesnap") && i + 1 < argc)
             {
                 snap_dump_at = strtoull(argv[++i], 0, 10);
@@ -2151,17 +2697,42 @@ int main(int argc, char *argv[])
                         "                                 takes effect only if it fires before -demo.\n");
                 printf("  -tracepc <file> [start end]    Log a unified main+SM PC trace to <file> for the\n"
                        "                                 [start, end) cycle window (default 200M..210M).\n");
+                printf("  -pcmtrace                      Log PCM control-register writes to pcm_trace.log:\n"
+                       "                                 stock window regs 00-03/3c-3f, the 0xE800 extension\n"
+                       "                                 writes and the 0xE820/0xE821 extension reads.\n");
                 printf("  -savesnap <cycles>             Dump the full machine state to demo_snap.bin at\n"
                        "                                 <cycles>.\n");
                 printf("  -hashdump <cycles> <file>      Write a deterministic text state dump with FNV-1a\n"
                        "                                 hashes to <file> at <cycles> (once, keeps running).\n");
                 printf("  -loadsnap <file>               Load the full machine state from <file> at start\n"
                        "                                 (a keyless run starts from the exact saved state).\n");
+                printf("  -wav:<file>                    Write the producer-side int16 stereo sample stream\n"
+                       "                                 (after -gain and the int16 clamp) to a standard WAVE\n"
+                       "                                 file (PCM=1, 2ch, 16-bit, emulated rate). Default off.\n");
+                printf("  -audiowin <start> <end>        With -wav: capture only samples with mcu.cycles in\n"
+                       "                                 [start,end). At <end> the WAV sizes are backfilled and\n"
+                       "                                 the file closed, then <file>.meta (wavdump v1) is written\n"
+                       "                                 last as the completion marker.\n");
+                printf("  -audiohash <cycles> <file>     Write the FNV-1a64 of the int16 sample stream up to\n"
+                       "                                 <cycles> to <file> (one audio_fnv1a line). May be\n"
+                       "                                 repeated for multiple checkpoints.\n");
+                printf("  -midiseq <file> [start]        Post a text MIDI schedule (\"<cycle> <hexbyte>...\"\n"
+                       "                                 per line, '#' comments; cycles relative to <start>,\n"
+                       "                                 default 0) through the normal UART input path; the\n"
+                       "                                 8192-byte ring is never overwritten (backpressure).\n");
+                printf("  -snapinfo <cycles> <file>      Write text scalars at <cycles> to <file>: isr4fe\n"
+                       "                                 dispatch count, sleep/iml/pend, pcm.select_channel,\n"
+                       "                                 pcm.irq_channel and the voice-mask popcount.\n");
                 printf("\n");
-                printf("Polyphony extension:\n");
-                printf("  -voices:<n>                    Set polyphony to <n> voices (default 28, range 28..255).\n"
-                       "                                 n != 28 applies an in-memory ROM patch; the disk ROM is\n"
-                       "                                 never modified. n == 28 keeps stock behavior.\n");
+                printf("Polyphony extension / native core:\n");
+                printf("  -voices:<n>                    Set the target polyphony to <n> voices (default 28,\n"
+                       "                                 range 28..255). n == 28 keeps stock behavior; n != 28\n"
+                       "                                 requests the extended engine path in the emulator (the\n"
+                       "                                 disk ROM is never modified).\n");
+                printf("  -mk2cpp                        Use the translated mk2cpp core when linked (mixed with\n"
+                       "                                 the GT interpreter as needed).\n");
+                printf("  -mk2cpp-hand:0|1               Enable (1, default) or skip (0) the M4 native hand\n"
+                       "                                 table for the same-binary A/B gate.\n");
                 return 0;
             }
             else if (!strcmp(argv[i], "-sc155"))
@@ -2176,6 +2747,14 @@ int main(int argc, char *argv[])
             }
         }
     }
+
+    // ---- mk2cpp post-parse hooks (hand override flag) ----
+    MK2CPP_Configure(argc, argv);
+
+    // ---- M4 oracle setup (no-ops unless the matching options were given) ----
+    audio_capture_on = (g_wav_path != nullptr) || (g_audio_hash_n > 0);
+    if (g_midiseq_file)
+        midiseq_load(g_midiseq_file);
 
     // ---- validate -demo / -mocknote start cycles (both must be >= 144M) ----
     if (demo_seq_enabled && demo_start < 144000000)
@@ -2294,6 +2873,11 @@ int main(int argc, char *argv[])
             mcu_scb55 = true;
             break;
     }
+
+    // ---- M4 audio tap: open the WAV once the ROM set (rate) is known ----
+    g_wav_rate = (mcu_mk1 || mcu_jv880) ? 64000 : 66207;
+    if (g_wav_path)
+        audio_dump_open(g_wav_path);
 
     std::string rpaths[ROM_SET_N_FILES];
 
@@ -2482,10 +3066,16 @@ int main(int argc, char *argv[])
     MCU_Reset();
     SM_Reset();
     PCM_Reset();
+    // ---- mk2cpp native engine post-reset hook (extension activation point) ----
+    MK2CPP_PostReset();
 
     if (resetType != ResetType::NONE) MIDI_Reset(resetType);
 
     MCU_Run();
+
+    // Normal exit (window closed): backfill and close any open WAV. The
+    // -audiowin path already did this at the end cycle; atexit is the backstop.
+    audio_dump_finalize();
 
     MCU_CloseAudio();
     MIDI_Quit();

@@ -583,8 +583,12 @@ inline void eram_pack(int addr, int val)
 
 void PCM_Update(uint64_t cycles)
 {
-    // Extended mode: config_reg_3d = voices-1 (1..255). Stock mode: 5-bit field.
-    int reg_slots = pcm_ext_active ? (pcm.config_reg_3d + 1) : ((pcm.config_reg_3d & 31) + 1);
+    // Solution A (mk2cpp/out/m4/12_cfg3d_voice_count.md): the voice count comes
+    // from the run configuration (-voices / pcm_ext_voices, the native engine's
+    // single source of truth). config_reg_3d keeps its hardware semantics only:
+    // bit5 = waveform ROM bank mode consumed by PCM_ReadROM (stock value 0x7b),
+    // so the value is never re-stamped to n-1. Stock mode keeps the 5-bit field.
+    int reg_slots = pcm_ext_active ? pcm_ext_voices : ((pcm.config_reg_3d & 31) + 1);
     uint8_t voice_active[32];
     for (int i = 0; i < 32; i++)
         voice_active[i] = pcm.voice_mask[i] & pcm.voice_mask_pending[i];

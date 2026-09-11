@@ -83,12 +83,39 @@ oracle：demo 200M 窗口 0 分歧；boot 3M 0 分歧。
 oracle：`s` 行 SM trace 与 GT 逐条一致（两模式 + 基线）；LCD 渲染与 GT 相同帧序列
 （`hash.lcd_state` 一致）。**已达成。**
 
-### M4 语义化 + 256
-交付：`src/hand/` 中 voice/PCM 原生实现；`-voices:<n>` 走新引擎。
-oracle：
-- n=28：与 stock 音频输出 null 测试（容差 0 或明确量化误差）；
-- n=32/64/128/256：长跑稳定、无复位、PCM 激活、CPU 占空比合理；
-- 与 `../tools/docs/task_irq_map.md` §4 的 O1–O10 验收矩阵一致（256 目标）。
+### M4 语义化 + 255 复音（容量 256）
+
+交付分层：
+- **M4a 控制语义化**：`src/hand/` 把 voice/PCM 控制路径原生化（固件寄存器写 →
+  typed API/原生状态），DSP 仍用 GT `PCM_Update`；n=28 音频 null 先通过。
+- **M4b DSP 移植**：逐行机械移植 `PCM_Update` 定点步骤（20 位量化/`nfs`/浮点分支），
+  用音频 tap 做逐样本对拍。
+- **M4c 255 优化**：inactive voice 跳过/批处理（须证明与全跑等价），`-voices:255`
+  实时性达标。
+
+切片顺序（详见 `09_m4_integration.md` §5.5）：PCM enable/disable flush → pool-init →
+alloc/free（**slice-2**）→ per-voice materialize/PCM 写路径 → …；前期限定 L0（一次
+`MK2CPP_Step` = 恰好一条 H8 指令），整例程 hook（L1）在 n=28 null 通过前不得启用。
+slice-2 规格见 `11_slice2_pool_spec.md`：pool-init 可被中断（boot 实测 2 次 FRT2）**必须
+L0**；L1 首个用例只用全 IML=7 的 `mask_acc 0x1ad3`；命名勘误——`0x1823/0x187e` 是
+release 而非 alloc（分配器 = `pool_pop 0x19ad` + `link 0x194c`），`a3a0 0x94` 是 free
+标记、`a368` 是 slot→part。
+
+依赖（Wave 0）：
+- 集成骨架：hand 独立稀疏 override 表 + `MK2CPP_Configure/PostReset`（`09`）；
+- 音频 tap：`-wav:`/`-audiowin`/`-audiohash` 与 `-snapinfo`（`08`/`10`）；
+- 音频基线冻结（stock 300M–320M）与 ≥255 同时音 MIDI 素材（**待办，需用户**，`10` §6）。
+
+oracle（口径与 `10_m4_oracle.md` 一致）：
+- n=28：与 stock 音频输出 null 测试（容差 0 或书面量化误差）；
+- `-voices:255`（"256 复音"指容量）：长跑稳定、无复位、PCM 激活、CPU 占空比合理；
+  压力矩阵 n=32/64/128/255；
+- 与 `../tools/docs/task_irq_map.md` §4 的 O1–O10 验收矩阵一致；
+- 音频/听感窗口 ≥300M，状态 ≥200M；超时 = ceil(终点/24e6×2)+15s。
+
+设计文档：`07_m4_voice_spec.md`（voice 语义）、`08_m4_pcm_api.md`（PCM/音频）、
+`09_m4_integration.md`（覆盖表/开关矩阵）、`10_m4_oracle.md`（验收 oracle）、
+`11_slice2_pool_spec.md`（slice-2 pool-init/release/free 规格）。
 
 ## 3. 风险与对策
 

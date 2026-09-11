@@ -219,6 +219,13 @@ if(MK2CPP_GEN_DIR)
     list(APPEND SC55_SRC ${MK2CPP_GEN_SRC} ${MK2CPP_SM_GEN_SRC})
 endif()
 
+# Committed native mk2cpp hand implementations (M4). The directory is empty by
+# default; an empty glob keeps the build identical to M1-M3.
+file(GLOB MK2CPP_HAND_SRC "${CMAKE_CURRENT_SOURCE_DIR}/mk2cpp/src/hand/*.cpp")
+if(MK2CPP_HAND_SRC)
+    list(APPEND SC55_SRC ${MK2CPP_HAND_SRC})
+endif()
+
 add_executable(nuked-sc55 ${SC55_SRC} ${UTF8MAIN_SRCS})
 set_nopie(nuked-sc55)
 
@@ -232,6 +239,10 @@ if(MK2CPP_GEN_DIR)
     if(MK2CPP_SM_GEN_SRC)
         target_compile_definitions(nuked-sc55 PRIVATE MK2CPP_HAS_SM_GEN)
     endif()
+endif()
+
+if(MK2CPP_HAND_SRC)
+    target_compile_definitions(nuked-sc55 PRIVATE MK2CPP_HAS_HAND)
 endif()
 
 if(MSVC)
