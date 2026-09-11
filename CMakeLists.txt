@@ -197,6 +197,9 @@ set(SC55_SRC
     src/pcm.cpp src/pcm.h
     src/submcu.cpp src/submcu.h
 
+    # mk2cpp ROM->C++ translated core (no-op unless -mk2cpp; generated code optional)
+    mk2cpp/src/mk2cpp.cpp
+
     src/utils/files.cpp src/utils/files.h
 )
 
@@ -206,8 +209,21 @@ elseif(WIN32)
     list(APPEND SC55_SRC src/midi_win32.cpp)
 endif()
 
+# Optional generated mk2cpp code (ROM-derived; NOT committed). Point
+# -DMK2CPP_GEN_DIR=<mk2cpp/src/gen> at a locally generated directory.
+if(MK2CPP_GEN_DIR)
+    file(GLOB MK2CPP_GEN_SRC "${MK2CPP_GEN_DIR}/*.cpp")
+    list(APPEND SC55_SRC ${MK2CPP_GEN_SRC})
+endif()
+
 add_executable(nuked-sc55 ${SC55_SRC} ${UTF8MAIN_SRCS})
 set_nopie(nuked-sc55)
+
+target_include_directories(nuked-sc55 PRIVATE src mk2cpp/include)
+if(MK2CPP_GEN_DIR)
+    target_compile_definitions(nuked-sc55 PRIVATE MK2CPP_HAS_GEN)
+    target_include_directories(nuked-sc55 PRIVATE ${MK2CPP_GEN_DIR})
+endif()
 
 if(MSVC)
     target_compile_definitions(nuked-sc55 PRIVATE WIN32_CONSOLE)

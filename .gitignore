@@ -87,3 +87,9 @@ tools/python/*
 !tools/python/README.md
 tools/baselines/*
 !tools/baselines/README.md
+
+# mk2cpp: ROM-derived / debug artifacts (generated locally, never committed)
+mk2cpp/out/
+mk2cpp/src/gen/
+mk2cpp/tests/*.bin
+mk2cpp/tests/*.txt

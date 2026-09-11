@@ -21,6 +21,7 @@
 #define SDL_MAIN_HANDLED
 #include "SDL.h"
 #include "mcu.h"
+#include "mk2cpp.h"
 #include "mcu_opcodes.h"
 #include "mcu_interrupt.h"
 #include "mcu_timer.h"
@@ -1302,6 +1303,106 @@ static void state_load(FILE *f)
     LCD_StateLoad(f);
 }
 
+// ---- deterministic state hash dump: -hashdump <cycles> <file> ----
+static uint64_t hashdump_at = 0;
+static const char *hashdump_file = nullptr;
+static int hashdump_done = 0;
+
+static const uint64_t fnv1a_basis = 0xcbf29ce484222325ULL;
+static const uint64_t fnv1a_prime = 0x00000100000001b3ULL;
+
+static uint64_t fnv1a64(uint64_t h, const void *data, size_t len)
+{
+    const uint8_t *p = (const uint8_t *)data;
+    while (len--)
+    {
+        h ^= (uint64_t)*p++;
+        h *= fnv1a_prime;
+    }
+    return h;
+}
+
+static void hashdump_range(FILE *f, const char *name, const void *data, size_t len)
+{
+    fprintf(f, "hash.%s = %016llx\n", name,
+            (unsigned long long)fnv1a64(fnv1a_basis, data, len));
+}
+
+static void hashdump_write(const char *path)
+{
+    FILE *f = fopen(path, "w");
+    if (!f)
+    {
+        printf("hashdump: cannot open %s\n", path);
+        fflush(stdout);
+        return;
+    }
+
+    fprintf(f, "version = hashdump v1\n");
+    fprintf(f, "requested_cycles = %llu\n", (unsigned long long)hashdump_at);
+    fprintf(f, "mcu.cp = %02x\n", (unsigned)mcu.cp);
+    fprintf(f, "mcu.pc = %04x\n", (unsigned)mcu.pc);
+    fprintf(f, "mcu.sr = %04x\n", (unsigned)mcu.sr);
+    fprintf(f, "mcu.cycles = %llu\n", (unsigned long long)mcu.cycles);
+    fprintf(f, "pcm.config_reg_3c = %02x\n", (unsigned)pcm.config_reg_3c);
+    fprintf(f, "pcm.config_reg_3d = %02x\n", (unsigned)pcm.config_reg_3d);
+    fprintf(f, "pcm.irq_assert = %u\n", (unsigned)pcm.irq_assert);
+    fprintf(f, "pcm.cycles = %llu\n", (unsigned long long)pcm.cycles);
+    fprintf(f, "sm.pc = %04x\n", (unsigned)sm.pc);
+    fprintf(f, "sm.cycles = %llu\n", (unsigned long long)sm.cycles);
+
+    hashdump_range(f, "mcu", &mcu, sizeof(mcu));
+    hashdump_range(f, "ram", ram, RAM_SIZE);
+    hashdump_range(f, "sram", sram, SRAM_SIZE);
+    hashdump_range(f, "dev_register", dev_register, sizeof(dev_register));
+    hashdump_range(f, "frt", frt, sizeof(frt));
+    hashdump_range(f, "timer", &timer, sizeof(timer));
+    hashdump_range(f, "timer_cycles", &timer_cycles, sizeof(timer_cycles));
+    hashdump_range(f, "timer_tempreg", &timer_tempreg, sizeof(timer_tempreg));
+    hashdump_range(f, "ad_val", ad_val, sizeof(ad_val));
+    hashdump_range(f, "analog_end_time", &analog_end_time, sizeof(analog_end_time));
+    hashdump_range(f, "ga_int", ga_int, sizeof(ga_int));
+    hashdump_range(f, "io_sd", &io_sd, sizeof(io_sd));
+    hashdump_range(f, "mcu_p0_data", &mcu_p0_data, sizeof(mcu_p0_data));
+    hashdump_range(f, "mcu_p1_data", &mcu_p1_data, sizeof(mcu_p1_data));
+    hashdump_range(f, "pcm", &pcm, sizeof(pcm));
+    hashdump_range(f, "sm", &sm, sizeof(sm));
+    hashdump_range(f, "sm_ram", sm_ram, sizeof(sm_ram));
+    hashdump_range(f, "sm_shared_ram", sm_shared_ram, sizeof(sm_shared_ram));
+    hashdump_range(f, "sm_access", sm_access, sizeof(sm_access));
+    hashdump_range(f, "sm_device_mode", sm_device_mode, sizeof(sm_device_mode));
+    hashdump_range(f, "sm_p0_dir", &sm_p0_dir, sizeof(sm_p0_dir));
+    hashdump_range(f, "sm_p1_dir", &sm_p1_dir, sizeof(sm_p1_dir));
+    hashdump_range(f, "sm_cts", &sm_cts, sizeof(sm_cts));
+    hashdump_range(f, "sm_timer_cycles", &sm_timer_cycles, sizeof(sm_timer_cycles));
+    hashdump_range(f, "sm_timer_prescaler", &sm_timer_prescaler, sizeof(sm_timer_prescaler));
+    hashdump_range(f, "sm_timer_counter", &sm_timer_counter, sizeof(sm_timer_counter));
+    hashdump_range(f, "uart_buffer", uart_buffer, uart_buffer_size);
+    hashdump_range(f, "uart_rx_byte", &uart_rx_byte, sizeof(uart_rx_byte));
+
+    FILE *lf = tmpfile();
+    if (lf)
+    {
+        LCD_StateSave(lf);
+        fflush(lf);
+        fseek(lf, 0, SEEK_END);
+        long lsz = ftell(lf);
+        fseek(lf, 0, SEEK_SET);
+        if (lsz > 0)
+        {
+            uint8_t *lbuf = (uint8_t *)malloc((size_t)lsz);
+            if (lbuf && fread(lbuf, 1, (size_t)lsz, lf) == (size_t)lsz)
+                hashdump_range(f, "lcd_state", lbuf, (size_t)lsz);
+            free(lbuf);
+        }
+        fclose(lf);
+    }
+
+    printf("hashdump: dumped state at c%llu to %s\n", (unsigned long long)mcu.cycles, path);
+    fflush(stdout);
+    fclose(f);
+}
+
 int SDLCALL work_thread(void* data)
 {
     work_thread_lock = SDL_CreateMutex();
@@ -1346,7 +1447,12 @@ int SDLCALL work_thread(void* data)
             mcu.ex_ignore = 0;
 
         if (!mcu.sleep)
-            MCU_ReadInstruction();
+        {
+            if (mk2cpp_enabled && MK2CPP_CanStep(((uint32_t)mcu.cp << 16) | mcu.pc))
+                MK2CPP_Step();
+            else
+                MCU_ReadInstruction();
+        }
 
         mcu.cycles += 12; // FIXME: assume 12 cycles per instruction
 
@@ -1426,6 +1532,14 @@ int SDLCALL work_thread(void* data)
                 fclose(f);
             }
             snap_done = 1;
+        }
+
+        // ---- deterministic state hash dump trigger (-hashdump <cycles> <file>) ----
+        if (!hashdump_done && hashdump_at && mcu.cycles >= hashdump_at)
+        {
+            if (hashdump_file)
+                hashdump_write(hashdump_file);
+            hashdump_done = 1;
         }
 
         // if (mcu.cycles % 24000000 == 0)
@@ -1860,6 +1974,13 @@ int main(int argc, char *argv[])
                     pageNum = 32;
                 }
             }
+            else if (!strcmp(argv[i], "-mk2cpp"))
+            {
+                mk2cpp_enabled = 1;
+                MK2CPP_Init();
+                printf("mk2cpp: translated core enabled (mixed=%d) -- %s\n", mk2cpp_mixed, MK2CPP_Version());
+                fflush(stdout);
+            }
             else if (!strcmp(argv[i], "-mk2"))
             {
                 romset = ROM_SET_MK2;
@@ -1910,6 +2031,18 @@ int main(int argc, char *argv[])
             else if (!strcmp(argv[i], "-savesnap") && i + 1 < argc)
             {
                 snap_dump_at = strtoull(argv[++i], 0, 10);
+            }
+            else if (!strcmp(argv[i], "-hashdump"))
+            {
+                if (i + 2 < argc)
+                {
+                    hashdump_at = strtoull(argv[++i], 0, 10);
+                    hashdump_file = argv[++i];
+                }
+                else
+                {
+                    fprintf(stderr, "warning: -hashdump requires <cycles> <file>, ignored\n");
+                }
             }
             else if (!strcmp(argv[i], "-loadsnap") && i + 1 < argc)
             {
@@ -2020,6 +2153,8 @@ int main(int argc, char *argv[])
                        "                                 [start, end) cycle window (default 200M..210M).\n");
                 printf("  -savesnap <cycles>             Dump the full machine state to demo_snap.bin at\n"
                        "                                 <cycles>.\n");
+                printf("  -hashdump <cycles> <file>      Write a deterministic text state dump with FNV-1a\n"
+                       "                                 hashes to <file> at <cycles> (once, keeps running).\n");
                 printf("  -loadsnap <file>               Load the full machine state from <file> at start\n"
                        "                                 (a keyless run starts from the exact saved state).\n");
                 printf("\n");

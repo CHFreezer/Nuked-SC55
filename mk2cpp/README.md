@@ -1,0 +1,78 @@
+# mk2cpp — SC-55mk2 固件 C++ 语义级翻译工程
+
+目标：把 **SC-55mk2 固件（rom1/rom2/rom_sm）**语义级翻译为 C++，以 **`mk2cpp.h`
+库形式集成回 GT，替换原 H8 解释器行为**（开关控制、未翻译 PC 可回退），
+设备/调度/音频全部复用 GT；最终以原生数据结构（`std::array<Voice,256>`、原生 PCM API）
+摆脱 H8 地址空间/8 位打包/32 位 mask 限制，实现 256 复音及后续维护。
+**不做独立可执行程序。**
+
+命名说明：`mk2cpp` = **MK2 ROM → C++**（准确）。不使用 `h8cpp` 这类名字——
+GT 是可跑多种固件的 H8 模拟器，本工程翻译的是 **MK2 的 ROM 代码**，不是重写 CPU 核；
+集成开关/符号统一 `mk2cpp`/`MK2CPP_`/`mk2c_` 前缀。
+
+Ground Truth（不可怀疑）：
+- ROM 字节（本地 `../roms/` 或 `../build/`，**不入 git**）
+- GT 仿真器 `../src/`（H8 语义、PCM、定时器、SM）
+- 既有反汇编基线 `../tools/baselines/`（本地 fixture）
+
+## 目录
+
+```
+mk2cpp/
+  README.md            本文件（目标/Ground Truth/政策）
+  include/mk2cpp.h     集成 ABI（MK2CPP_Init/CanStep/Step、开关、诊断；入库）
+  src/mk2cpp.cpp       集成胶水：分派表、回退统计、版本（入库）
+  src/gen/             自动翻译产物（**ROM 派生，不入 git**，本地生成，CMake 可选编译）
+  src/hand/            人工语义化改写（voice/PCM 子系统；入库策略见 02）
+  tools/h8lift/        ROM → C++ 反译器（入库）
+  tools/tracediff/     两模式 trace/状态差分（入库）
+  tools/cover/         覆盖率仪表盘（入库）
+  docs/                设计与约定（00_plan / 01_architecture / 02_conventions / 03-06 研究）
+  tests/               oracle 脚本（入库）；语料/快照本地
+  out/                 运行/中间产物（不入 git）
+```
+
+## 构建（GT 集成）
+
+GT 用 Ninja + clang-cl 构建，SDL2 用仓库内 `local/sdl2`（`SDL2_DIR` 指向其 cmake 目录）：
+
+```
+cmake -S . -B build -G Ninja ^
+  -DCMAKE_C_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe" ^
+  -DCMAKE_CXX_COMPILER="C:/Program Files/LLVM/bin/clang-cl.exe" ^
+  -DCMAKE_BUILD_TYPE=Release ^
+  -DSDL2_DIR="<repo>/local/sdl2/cmake"
+cmake --build build
+```
+
+- 默认**不含**生成码：`-mk2cpp` 会打印 `no translated code linked` 并整体回退解释器。
+- 本地启用生成码：追加 `-DMK2CPP_GEN_DIR=<repo>/mk2cpp/src/gen`（生成物不入 git）。
+- 验证（两模式零回归）：
+  `nuked-sc55.exe -mk2 -demo -tracepc <out> 200000000 202000000` vs
+  `nuked-sc55.exe -mk2 -mk2cpp -demo -tracepc <out> 200000000 202000000`，
+  再与 `tools/baselines` 的基准 trace 比对。
+
+## 硬性规则
+
+1. **研究先行**：遇到说不清的阻碍，先停实现、补证据文档，再恢复
+   （见 `../tools/docs/evidence_protocol.md` 与 `polyphony_256_todo.md` 施工规则）。
+2. **只提交代码与文档**：ROM 及派生产物（反汇编、trace、快照、`src/gen/` 输出）
+   一律本地；忽略规则放本地 `.git/info/exclude`（不写公开 `.gitignore`）。
+   提交前需确认：`mk2cpp/out/`、`mk2cpp/build/`、`mk2cpp/src/gen/`、
+   `mk2cpp/tests/*.bin|*.txt` 均在本机 exclude 内。
+3. **等价性**：M1–M3 期间，同一输入下 `-mk2cpp` 模式与默认解释器模式必须逐指令/逐状态一致
+   （同一 GT 二进制两模式对照）；任何简化都必须标注并给出 oracle。M4 起才允许语义化改写
+   改变实现方式，且必须通过音频/行为对照。
+4. **目录卫生**：调试产物写 `mk2cpp/out/` 或 `%TEMP%\opencode\`，任务收尾清空；
+   `../build/` 只留运行资产。
+
+## 里程碑
+
+| 阶段 | 交付 | 验收 oracle |
+|---|---|---|
+| M1 ✅ | `mk2cpp.h` 集成（`-mk2cpp` + 混合回退）+ h8lift（h8dec/h8part/h8emit）+ tracediff + cover + hashdump | **已达成（2026-09-11）**：9217 PC 注册；boot 0–3M 与 demo 200–202M 两模式 trace + 状态哈希 + 基准 trace 全部一致 |
+| M2 | 主固件全执行面翻译（含未执行可达路径） | demo/快照长跑 0 分歧；覆盖率 100%（执行集） |
+| M3 | 子 MCU 固件翻译 + LCD/面板/SM 行为一致 | SM trace 与 LCD 渲染对照一致 |
+| M4 | voice/PCM 语义化改写 + 256 复音 | n=28 音频 null 测试；n=256 长跑稳定 |
+
+详细设计见 `docs/00_plan.md`、`docs/01_architecture.md`、`docs/02_conventions.md`。
