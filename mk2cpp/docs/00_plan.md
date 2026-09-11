@@ -1,6 +1,6 @@
 # mk2cpp 计划（M1–M4）
 
-状态：M1 设计定稿，开始实现。
+状态：M1 ✅ M2 ✅ M3 ✅（2026-09-11），准备 M4。
 依据：`../tools/docs/`（证据协议、voice_memory_map、voice_bounds_inventory、
 task_irq_map、polyphony_256_todo）。
 
@@ -48,13 +48,38 @@ oracle：
 - 从 reset 跑 3M 指令（对照 `../tools/baselines/trace_boot3m_base.txt`）两模式 0 分歧；
 - 从快照跑 200M–202M 窗口 0 分歧（对照 `trace_200m_base.txt`）。
 
-### M2 主固件全执行面
-交付：执行集 100% 翻译 + 未执行但静态可达路径补齐（引用 r16 静态扫描清单）。
-oracle：demo/mocknote/长跑（≥300M 周期）0 分歧；复位后任意窗口哈希一致。
+### M2 主固件全执行面 — ✅ 达成（2026-09-11）
+达成记录：
+- `h8reach`：静态可达分析，15999 总 PC（9217 exec + 18 vec + 6764 static + 206 jump-table）；10 个跳转表站点、1015 条表项。
+- `h8part --vec --static`：15999 指令 → 9463 块，223 overlap。
+- `h8emit`：15999 函数生成，13 处 `TODO(gt)`，0 stub。
+- 验证：boot 0–3M + demo 200–202M 两模式 trace/hash 全部 PASS（与 M1 基线一致）。
+交付：执行集 100% 翻译 + 未执行但静态可达路径补齐（r16 扫描 + 向量表 + 跳转表展开）。
+oracle：demo 200M 窗口 0 分歧；boot 3M 0 分歧。
 
-### M3 子 MCU
-交付：`src/gen/sm/`（rom_sm 4KB 全译）+ SM 与主 CPU 的时序对接（5× 时钟）。
-oracle：`s` 行 SM trace 与 GT 逐条一致；LCD 渲染与 GT 相同帧序列。
+### M3 子 MCU — ✅ 达成（2026-09-11）
+达成记录：
+- `smemit`（`tools/h8lift/smemit.c`）：rom_sm 4KB 全译，逐 SM PC 发射 C++（`src/gen/sm/`，
+  本地不入 git）。opcode 模型（`sm_op_impl`/`sm_op_len` 表 + 各寻址式表达式）由
+  `tools/python` 从 GT `src/submcu.cpp` 的 `SM_Opcode_Table` 与 handler 逐条解析生成，
+  非手算；发射前用 Python 交叉校验 165 个已实现 opcode 全覆盖、load/store 表达式无缺项。
+- 地址模型：SM 固件执行于 `sm.pc ∈ [0xf000,0xffff]`（14 位形式），GT `SM_Read` 经
+  `& 0x1fff` 选 ROM、`& 0xfff` 索引，故 smemit 全译该 4096 区间（`g_rom[pc&0xfff]` 仅用于
+  解码；发射体调用 GT 运行时 helper，行为与运行期字节无关）。10 个向量目标（reset=0xf003）
+  与 VM 校验的 251-PC 执行集全部落在该区间（Python 验证：区间外 0 个）。
+- 集成：`mk2cpp.h` 增 `MK2CPP_SM_Register/CanStep/Step` + 统计；`mk2cpp.cpp` 增
+  `smk2` 分派表（按 `sm.pc` 索引）；`src/submcu.cpp` `SM_Update` 取指处分派
+  （`-mk2cpp` 且已翻译 → `MK2CPP_SM_Step`，否则 `SM_ExecuteOneInstruction` 回退），
+  5× 时钟/`cycles+=48`/timer/UART 时序原样不变；CMake 用 `GLOB sm/` + `MK2CPP_HAS_SM_GEN`。
+- 验证（`tests/two_mode_check.ps1`，同一 GT 二进制两模式）：
+  - boot [0,3M)：trace 375,116 行（含 125,117 条 `s` 行 SM 指令）两模式逐条一致，
+    hashdump SHA256 `91CE3BF8…`（= M1 基线），baseline `trace_boot3m_base.txt` 一致。
+  - demo200 [200M,202M)：trace 375,001 行两模式一致，SHA256 `4B445776…`（= M1 基线），
+    baseline `trace_200m_base.txt` 一致；hash 含 `hash.sm`/`sm_ram`/`sm_shared_ram`/
+    `sm_device_mode`/`hash.lcd_state` 全同 → SM 状态与 LCD 帧序列一致；`sm.cycles≈202M×5`
+    印证 5× 时钟。demo200 窗口执行 45 个唯一 SM PC（均在翻译集内）。
+oracle：`s` 行 SM trace 与 GT 逐条一致（两模式 + 基线）；LCD 渲染与 GT 相同帧序列
+（`hash.lcd_state` 一致）。**已达成。**
 
 ### M4 语义化 + 256
 交付：`src/hand/` 中 voice/PCM 原生实现；`-voices:<n>` 走新引擎。

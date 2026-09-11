@@ -23,6 +23,7 @@ mk2cpp/
   include/mk2cpp.h     集成 ABI（MK2CPP_Init/CanStep/Step、开关、诊断；入库）
   src/mk2cpp.cpp       集成胶水：分派表、回退统计、版本（入库）
   src/gen/             自动翻译产物（**ROM 派生，不入 git**，本地生成，CMake 可选编译）
+                       顶层 = 主 H8（mk2c_r1/r2 + init）；sm/ = 子 MCU（mk2c_sm + init，M3）
   src/hand/            人工语义化改写（voice/PCM 子系统；入库策略见 02）
   tools/h8lift/        ROM → C++ 反译器（入库）
   tools/tracediff/     两模式 trace/状态差分（入库）
@@ -57,9 +58,10 @@ cmake --build build
 1. **研究先行**：遇到说不清的阻碍，先停实现、补证据文档，再恢复
    （见 `../tools/docs/evidence_protocol.md` 与 `polyphony_256_todo.md` 施工规则）。
 2. **只提交代码与文档**：ROM 及派生产物（反汇编、trace、快照、`src/gen/` 输出）
-   一律本地；忽略规则放本地 `.git/info/exclude`（不写公开 `.gitignore`）。
+   一律本地；忽略规则放公开 `.gitignore`（已含 `mk2cpp/` 派生路径，`.gitignore:91-95`），
+   **不要**写进本地 `.git/info/exclude`。
    提交前需确认：`mk2cpp/out/`、`mk2cpp/build/`、`mk2cpp/src/gen/`、
-   `mk2cpp/tests/*.bin|*.txt` 均在本机 exclude 内。
+   `mk2cpp/tests/*.bin|*.txt` 均被 `.gitignore` 命中（`git check-ignore` 验证）。
 3. **等价性**：M1–M3 期间，同一输入下 `-mk2cpp` 模式与默认解释器模式必须逐指令/逐状态一致
    （同一 GT 二进制两模式对照）；任何简化都必须标注并给出 oracle。M4 起才允许语义化改写
    改变实现方式，且必须通过音频/行为对照。
@@ -72,7 +74,7 @@ cmake --build build
 |---|---|---|
 | M1 ✅ | `mk2cpp.h` 集成（`-mk2cpp` + 混合回退）+ h8lift（h8dec/h8part/h8emit）+ tracediff + cover + hashdump | **已达成（2026-09-11）**：9217 PC 注册；boot 0–3M 与 demo 200–202M 两模式 trace + 状态哈希 + 基准 trace 全部一致 |
 | M2 | 主固件全执行面翻译（含未执行可达路径） | demo/快照长跑 0 分歧；覆盖率 100%（执行集） |
-| M3 | 子 MCU 固件翻译 + LCD/面板/SM 行为一致 | SM trace 与 LCD 渲染对照一致 |
+| M3 ✅ | 子 MCU 固件翻译（`smemit` 全译 rom_sm 4KB）+ SM/主 CPU 5× 时序对接 | **已达成（2026-09-11）**：4096 SM PC 全译；boot+demo200 两模式 `s` 行 SM trace 逐条一致、hashdump 与 M1 基线同哈希（含 `hash.sm`/`sm_ram`/`hash.lcd_state`）；执行集（45/251 PC）全落翻译区间 |
 | M4 | voice/PCM 语义化改写 + 256 复音 | n=28 音频 null 测试；n=256 长跑稳定 |
 
 详细设计见 `docs/00_plan.md`、`docs/01_architecture.md`、`docs/02_conventions.md`。

@@ -46,8 +46,14 @@ Scenario presets: `boot` = `[0,3000000)` hash@3000000; `demo200` =
    (exit 0 required; exit 1 = first divergence, 2/3 = prefix).
 2. `def.hash` vs `tr.mk2cpp.hash` — `Get-FileHash` SHA256.
 3. `def.trace` vs `tools\baselines\trace_boot3m_base.txt` (boot, 0/3M only) or
-   `trace_200m_base.txt` (demo200, 200M/202M only). If the fixture is absent the
-   check is `SKIP`, not a failure.
+    `trace_200m_base.txt` (demo200, 200M/202M only). If the fixture is absent the
+    check is `SKIP`, not a failure.
+
+Since M3 the SM (sub MCU) is part of this check automatically: the unified trace
+carries the `s <sm_cycles> <pc>` SM lines (boot ~125K, demo200 ~208K), and the
+state hash includes `hash.sm`, `sm_ram`, `sm_shared_ram`, `sm_device_mode` and
+`hash.lcd_state` — so a PASS also proves the translated SM (`-mk2cpp`) drives the
+SM state and LCD identically to the GT interpreter.
 
 The script also checks that both runs produced a non-empty trace and hash; if a
 file never appears it marks `FAIL` and prints the tail of the run's stdout and

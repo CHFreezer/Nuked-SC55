@@ -190,6 +190,27 @@ static void sha256_hex(const uint8_t *data, size_t len, char out[65])
     out[64] = 0;
 }
 
+/* Known-answer self-test: the digest goes into the generated headers as
+ * ROM/fixture binding metadata, so a broken implementation must abort. */
+static void sha256_selftest(void)
+{
+    static const char *const EMPTY_EXPECT =
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    static const char *const ABC_EXPECT =
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    char h[65];
+    sha256_hex(NULL, 0, h);
+    if (strcmp(h, EMPTY_EXPECT) != 0) {
+        fprintf(stderr, "h8emit: sha256 self-test failed (empty): got %s\n", h);
+        exit(2);
+    }
+    sha256_hex((const uint8_t *)"abc", 3, h);
+    if (strcmp(h, ABC_EXPECT) != 0) {
+        fprintf(stderr, "h8emit: sha256 self-test failed (abc): got %s\n", h);
+        exit(2);
+    }
+}
+
 /* ====================================================================== */
 /* ROM access (same bank rules as h8dec/h8part)                            */
 /* ====================================================================== */
@@ -1613,6 +1634,7 @@ int main(int argc, char **argv)
     const char *outdir = NULL;
     const char *only_path = NULL;
     const char *pos[4];
+    sha256_selftest();
     int npos = 0;
     int i;
     uint32_t *only_pcs = NULL;

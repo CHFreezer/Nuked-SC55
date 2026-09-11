@@ -4,10 +4,14 @@
  *
  * Usage:
  *   h8part.exe <rom1.bin> <rom2.bin> <pc_main.txt> <flow_main.txt> <outdir>
+ *              [--vec <vec_pcs.txt>] [--static <static_pcs.txt>]
  *
- * Every argument may be omitted, in which case it falls back to:
+ * Every positional argument may be omitted, in which case it falls back to:
  *   build/rom1.bin build/rom2.bin tools/baselines/pc_main.txt
  *   tools/baselines/flow_main.txt mk2cpp/out/h8part
+ *
+ * --vec / --static add supplemental PC sets (from h8reach) to the main list
+ * before partitioning; all sets are merged, sorted, and deduplicated.
  *
  * Outputs in <outdir>:
  *   map.csv     flat,rom,fileoff,len,kind,cat,block_fn,block_start,rel
@@ -313,11 +317,40 @@ static void mark_reason(uint8_t *reasons, uint32_t flat, int bit, int32_t *insn_
 
 int main(int argc, char **argv)
 {
-    const char *rom1_path = argc > 1 ? argv[1] : "build/rom1.bin";
-    const char *rom2_path = argc > 2 ? argv[2] : "build/rom2.bin";
-    const char *pc_path   = argc > 3 ? argv[3] : "tools/baselines/pc_main.txt";
-    const char *flow_path = argc > 4 ? argv[4] : "tools/baselines/flow_main.txt";
-    const char *outdir    = argc > 5 ? argv[5] : "mk2cpp/out/h8part";
+    const char *rom1_path = NULL;
+    const char *rom2_path = NULL;
+    const char *pc_path   = NULL;
+    const char *flow_path = NULL;
+    const char *outdir    = NULL;
+    const char *vec_path  = NULL;
+    const char *static_path = NULL;
+    int pos = 0;
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--vec") == 0) {
+            if (++i >= argc) die("--vec requires a file argument");
+            vec_path = argv[i];
+        } else if (strcmp(argv[i], "--static") == 0) {
+            if (++i >= argc) die("--static requires a file argument");
+            static_path = argv[i];
+        } else {
+            switch (pos++) {
+            case 0: rom1_path = argv[i]; break;
+            case 1: rom2_path = argv[i]; break;
+            case 2: pc_path   = argv[i]; break;
+            case 3: flow_path = argv[i]; break;
+            case 4: outdir    = argv[i]; break;
+            default:
+                die("usage: h8part.exe [rom1.bin rom2.bin pc_main.txt flow_main.txt outdir] [--vec <file>] [--static <file>]");
+            }
+        }
+    }
+    if (!rom1_path) rom1_path = "build/rom1.bin";
+    if (!rom2_path) rom2_path = "build/rom2.bin";
+    if (!pc_path)   pc_path   = "tools/baselines/pc_main.txt";
+    if (!flow_path) flow_path = "tools/baselines/flow_main.txt";
+    if (!outdir)    outdir    = "mk2cpp/out/h8part";
 
     uint32_t rom1_size = 0, rom2_size = 0;
     uint8_t *rom1;
@@ -331,7 +364,7 @@ int main(int argc, char **argv)
     pinsn_t *ins;
     int32_t *insn_of;
     int32_t *owner;
-    size_t i, root = 0;
+    size_t root = 0;
     long entries = 0, blocks = 0, overlaps = 0;
     int maxrun = 0;
     long kind_count[6] = {0, 0, 0, 0, 0, 0};
@@ -343,9 +376,6 @@ int main(int argc, char **argv)
     static const char *const KIND_NAME[6] = {
         "none", "call", "uncond", "cond", "ret", "reg-indirect"
     };
-
-    if (argc > 6)
-        die("usage: h8part.exe [rom1.bin rom2.bin pc_main.txt flow_main.txt outdir]");
 
     memset(&pcs, 0, sizeof pcs);
 
@@ -362,6 +392,19 @@ int main(int argc, char **argv)
     pc_lines = read_pcs(pc_path, &pcs);
     if (pcs.n == 0)
         die("no executed PCs in '%s'", pc_path);
+    if (vec_path) {
+        size_t before = pcs.n;
+        read_pcs(vec_path, &pcs);
+        fprintf(stderr, "h8part: vec=%s (%zu new, total %zu)\n",
+                vec_path, pcs.n - before, pcs.n);
+    }
+    if (static_path) {
+        size_t before = pcs.n;
+        read_pcs(static_path, &pcs);
+        fprintf(stderr, "h8part: static=%s (%zu new, total %zu)\n",
+                static_path, pcs.n - before, pcs.n);
+    }
+    vec_sort_unique(&pcs);
     flow_lines = read_flow(flow_path, &es, &ed, &ne);
 
     indeg = (uint8_t *)xcalloc(ADDR_SPACE, 1);

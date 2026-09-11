@@ -30,9 +30,20 @@ int  MK2CPP_CanStep(uint32_t flat);
 /* Execute exactly one instruction at the current mcu.cp/mcu.pc. */
 void MK2CPP_Step(void);
 
+/* ---- SM (sub MCU, M37450) translated dispatch (M3) -------------------- */
+typedef void (*mk2cpp_sm_fn)(void);
+/* Called by generated code to publish one translated SM PC (0xf000..0xffff). */
+void MK2CPP_SM_Register(uint16_t pc, mk2cpp_sm_fn fn);
+/* Non-zero if a translated implementation exists for the given sm.pc. */
+int  MK2CPP_SM_CanStep(uint16_t pc);
+/* Execute exactly one instruction at the current sm.pc (fallback if absent). */
+void MK2CPP_SM_Step(void);
+
 /* Diagnostics. */
 uint32_t MK2CPP_FallbackCount(void);
 uint32_t MK2CPP_TranslatedCount(void);
+uint32_t MK2CPP_SM_FallbackCount(void);
+uint32_t MK2CPP_SM_TranslatedCount(void);
 const char *MK2CPP_Version(void);
 
 #ifdef __cplusplus

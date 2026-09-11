@@ -20,6 +20,7 @@
 #include "SDL_audio.h"
 #include "mcu.h"
 #include "submcu.h"
+#include "mk2cpp.h"
 
 enum {
     SM_VECTOR_UART3_TX = 0,
@@ -1414,6 +1415,15 @@ void SM_UpdateUART(void)
 // The SM is asynchronous (5x the main rate, 48 sm-cycles/instr), so per-main-
 // cycle sampling of sm.pc misses instructions. Logging inside SM_Update (via the
 // main-MCU-owned trace_write) captures every instruction with its sm-cycle.
+// Fetch and execute exactly one SM instruction (the GT interpreter step).
+// Used directly by SM_Update and as the mk2cpp mixed-mode fallback so both
+// paths share one implementation and advance sm.pc identically.
+void SM_ExecuteOneInstruction(void)
+{
+    uint8_t opcode = SM_ReadAdvance();
+    SM_Opcode_Table[opcode](opcode);
+}
+
 void SM_Update(uint64_t cycles)
 {
     while (sm.cycles < cycles * 5)
@@ -1423,9 +1433,10 @@ void SM_Update(uint64_t cycles)
         if (!sm.sleep)
         {
             trace_write(1, sm.cycles, sm.pc);
-            uint8_t opcode = SM_ReadAdvance();
-
-            SM_Opcode_Table[opcode](opcode);
+            if (mk2cpp_enabled && MK2CPP_SM_CanStep(sm.pc))
+                MK2CPP_SM_Step();
+            else
+                SM_ExecuteOneInstruction();
         }
 
         sm.cycles += 12 * 4; // FIXME

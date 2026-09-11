@@ -211,18 +211,27 @@ endif()
 
 # Optional generated mk2cpp code (ROM-derived; NOT committed). Point
 # -DMK2CPP_GEN_DIR=<mk2cpp/src/gen> at a locally generated directory.
+# The top-level *.cpp is the main-H8 translation; the sm/ subdir is the SM
+# (sub MCU) translation (M3). Each is enabled by its own define when present.
 if(MK2CPP_GEN_DIR)
     file(GLOB MK2CPP_GEN_SRC "${MK2CPP_GEN_DIR}/*.cpp")
-    list(APPEND SC55_SRC ${MK2CPP_GEN_SRC})
+    file(GLOB MK2CPP_SM_GEN_SRC "${MK2CPP_GEN_DIR}/sm/*.cpp")
+    list(APPEND SC55_SRC ${MK2CPP_GEN_SRC} ${MK2CPP_SM_GEN_SRC})
 endif()
 
 add_executable(nuked-sc55 ${SC55_SRC} ${UTF8MAIN_SRCS})
 set_nopie(nuked-sc55)
 
 target_include_directories(nuked-sc55 PRIVATE src mk2cpp/include)
+
 if(MK2CPP_GEN_DIR)
-    target_compile_definitions(nuked-sc55 PRIVATE MK2CPP_HAS_GEN)
     target_include_directories(nuked-sc55 PRIVATE ${MK2CPP_GEN_DIR})
+    if(MK2CPP_GEN_SRC)
+        target_compile_definitions(nuked-sc55 PRIVATE MK2CPP_HAS_GEN)
+    endif()
+    if(MK2CPP_SM_GEN_SRC)
+        target_compile_definitions(nuked-sc55 PRIVATE MK2CPP_HAS_SM_GEN)
+    endif()
 endif()
 
 if(MSVC)
