@@ -12,7 +12,7 @@
 | `cover/cover.c` | ✅ 已实现 | 100% / 60% / DATA·TRAP 不计入 / static 自动识别 四组自测通过；确定性输出（两次 SHA-256 相同） |
 | `h8lift/h8part.c` | ✅ 已实现（切块器） | 9217 指令 → 2576 块（与 doc06 §1.3 一致）；确定性（输入洗牌同哈希）；cover 100% |
 | `h8lift/h8emit.c` | ✅ 已实现（发射器） | 9217 函数、0 stub；切片/全量 clang-cl 编译通过；对 GT handler 差分 73,736 次执行 0 mismatch |
-| `h8lift/smemit.c` | ✅ 已实现（SM 发射器，M3） | rom_sm 4KB 全译 4096 函数、0 `(null)`；SHA256 自检通过；opcode 模型由 `tools/python` 从 GT 解析并经 Python 交叉校验（165 实现 opcode 全覆盖、load/store 无缺项）；boot+demo200 两模式 SM trace 0 分歧 |
+| `h8lift/smemit.c` | ✅ 已实现（SM 发射器，M3） | rom_sm 4KB 全译 4096 函数、0 `(null)`；SHA256 自检通过；opcode 模型由 `h8lift/sm_parse.py` 生成（impl 取 GT `SM_Opcode_Table`，len 取 GT handler 路径并以 `tools/disasm/smdasm.c` 的完整 AM 表交叉校验 165/165）；boot+demo200 两模式 SM trace 0 分歧 |
 | `tests/two_mode_check.ps1` | ✅ 已实现（编排） | boot / demo200 两模式全 PASS；失败路径验证 exit 1 |
 | `hashdump`（GT `-hashdump`） | ✅ 已实现 | h1=h2=h3（解释器两跑 + `-mk2cpp` 回退）同哈希；默认无副作用 |
 
@@ -59,8 +59,14 @@ smemit.exe <rom_sm.bin> <outdir> [--extra <pc-list.txt>]
 - 语义来源：GT `src/submcu.cpp`（`SM_Opcode_Table` + `SM_Opcode_*` handler），
   **逐条对齐，不得更正确**（含 T 标志 LDA/ORA/AND 与 IPCE 读的 FIXME 路径）。
 - opcode 模型（`sm_op_impl[256]`/`sm_op_len[256]` 表 + 各寻址式表达式）由
-  `tools/python`（`sm_parse.py`）从 GT 解析生成，**非手算**；`--extra` 可并入额外 PC
-  （如 `tools/baselines/pc_sm_251.txt`），但仅限 `[0xf000,0xffff]` 区间。
+  `h8lift/sm_parse.py` 从已入库来源生成，**非手算**：`impl` 取 GT
+  `src/submcu.cpp` 的 `SM_Opcode_Table`（GT 只实现 165/256），`len` 取各 GT
+  handler 路径实际取指字节数，并逐条与 `tools/disasm/smdasm.c` 的完整 M37450
+  寻址模式表交叉校验；同时校验 `smemit.c` 的 `emit_body`/load/store 表达式
+  覆盖与实现集完全一致。生成后自带校验：
+  `python mk2cpp/tools/h8lift/sm_parse.py --check mk2cpp/tools/h8lift/smemit.c`。
+  `--extra` 可并入额外 PC（如 `tools/baselines/pc_sm_251.txt`），但仅限
+  `[0xf000,0xffff]` 区间。
 
 ## tracediff — 两模式差分验证（M1）
 

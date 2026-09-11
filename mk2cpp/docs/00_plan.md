@@ -61,8 +61,10 @@ oracle：demo 200M 窗口 0 分歧；boot 3M 0 分歧。
 达成记录：
 - `smemit`（`tools/h8lift/smemit.c`）：rom_sm 4KB 全译，逐 SM PC 发射 C++（`src/gen/sm/`，
   本地不入 git）。opcode 模型（`sm_op_impl`/`sm_op_len` 表 + 各寻址式表达式）由
-  `tools/python` 从 GT `src/submcu.cpp` 的 `SM_Opcode_Table` 与 handler 逐条解析生成，
-  非手算；发射前用 Python 交叉校验 165 个已实现 opcode 全覆盖、load/store 表达式无缺项。
+  `tools/h8lift/sm_parse.py` 从已入库来源生成：`impl` 取 GT `src/submcu.cpp` 的
+  `SM_Opcode_Table`（GT 只实现 165/256），`len` 取 GT handler 路径的取指字节数，
+  并逐条与 `tools/disasm/smdasm.c` 的完整 M37450 表交叉校验（165/165 一致），
+  非手算；`sm_parse.py --check` 可复验 `smemit.c` 内嵌表。
 - 地址模型：SM 固件执行于 `sm.pc ∈ [0xf000,0xffff]`（14 位形式），GT `SM_Read` 经
   `& 0x1fff` 选 ROM、`& 0xfff` 索引，故 smemit 全译该 4096 区间（`g_rom[pc&0xfff]` 仅用于
   解码；发射体调用 GT 运行时 helper，行为与运行期字节无关）。10 个向量目标（reset=0xf003）

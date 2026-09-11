@@ -291,7 +291,7 @@ static void sb_printf(sb_t *b, const char *fmt, ...)
 
 static uint8_t g_rom[4096];
 
-/* GENERATED from src/submcu.cpp SM_Opcode_Table by tools/python (sm_parse.py). DO NOT EDIT. */
+/* GENERATED from src/submcu.cpp SM_Opcode_Table by mk2cpp/tools/h8lift/sm_parse.py. DO NOT EDIT. */
 static const uint8_t sm_op_impl[256] = {
     0x00, 0x01, 0x01, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01,
     0x01, 0x01, 0x01, 0x01, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x01, 0x00, 0x01,
@@ -330,9 +330,14 @@ static const uint8_t sm_op_len[256] = {
     0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x01,
 };
 /* Operand byte count per opcode (instruction length = 1 + this).
- * Tables derived verbatim from src/submcu.cpp SM_Opcode_Table + handlers by
- * tools/python (sm_parse.py): no hand-computed hex. sm_op_len is 0 for
- * NotImplemented slots (never used, since sm_op_impl guards them). */
+ * sm_op_impl comes from src/submcu.cpp SM_Opcode_Table (GT implements only
+ * 165 of 256 slots; the rest trap). sm_op_len counts the operand bytes each
+ * GT handler path actually fetches, cross-checked 165/165 against the complete
+ * M37450 addressing-mode table in tools/disasm/smdasm.c (GT alone cannot
+ * describe the unimplemented slots). sm_op_len is 0 for NotImplemented slots
+ * (never used, since sm_op_impl guards them). No hand-computed hex.
+ * Regenerate / verify with:
+ *   python mk2cpp/tools/h8lift/sm_parse.py --check mk2cpp/tools/h8lift/smemit.c */
 static int sm_op_operand_bytes(uint8_t op)
 {
     return sm_op_len[op];
