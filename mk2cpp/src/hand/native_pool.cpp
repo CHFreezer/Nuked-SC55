@@ -352,13 +352,8 @@ int pool_check_legacy(void)
 
 void pool_post_reset(void)
 {
-    int n = pcm_ext_voices;
-    if (n < kLegacy)
-        n = kLegacy;
-    if (n > 255)
-        n = 255;
     memset(&g_pool, 0, sizeof(g_pool));
-    g_pool.voices = (uint8_t)n;
+    g_pool.voices = (uint8_t)kLegacy;
     g_pool.legacy_limit = (uint8_t)kLegacy;
 }
 

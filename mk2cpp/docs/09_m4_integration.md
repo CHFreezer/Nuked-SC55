@@ -1,5 +1,10 @@
 # 09 M4 hand 覆盖表与集成设计
 
+> **暂缓（2026-09-11）**：本文的开关矩阵中 `pcm_ext_active=1` 仅当 `-mk2cpp &&
+> -voices:n` 且 n≠28 的设计随 256 扩展回滚而**暂缓**。hand 覆盖表 / `MK2CPP_*`
+> 集成骨架（L0/L1、稀疏 override 表、`MK2CPP_Configure/PostReset`）本身不依赖 256，
+> 仍有效；`src/hand/pcm_enable.cpp` 当前只翻译 stock 28 的 PCM flush。
+
 状态：已评审 v1，2026-09-11。
 配套文档：[07 voice 语义](07_m4_voice_spec.md) · [08 PCM 引擎与音频路径](08_m4_pcm_api.md) · [10 验收 oracle](10_m4_oracle.md) · [00 计划](00_plan.md)。
 阅读顺序：00_plan §M4 → 07 → 08 → **09（集成/分派）** → 10。

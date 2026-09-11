@@ -1,6 +1,6 @@
 # mk2cpp 计划（M1–M4）
 
-状态：M1 ✅ M2 ✅ M3 ✅（2026-09-11），准备 M4。
+状态：M1 ✅ M2 ✅ M3 ✅（2026-09-11）；M4 暂缓（256 复音扩展已回滚 2026-09-11）。
 依据：`../tools/docs/`（证据协议、voice_memory_map、voice_bounds_inventory、
 task_irq_map、polyphony_256_todo）。
 
@@ -10,7 +10,9 @@ task_irq_map、polyphony_256_todo）。
 - **不翻译**：采样/波形 ROM（数据引擎输入）、GT 设备模型（PCM/定时器/LCD/ADC 等，
   以宿主 API 复用，不重写行为）。
 - **终态**：GT 的 `-mk2cpp` 模式（`mk2cpp.h` 库）用翻译后的 C++ 跑同一 ROM 场景，
-  行为与默认解释器模式等价；之后在 M4 对 voice/PCM 做语义化改写并支持 256。
+  行为与默认解释器模式等价。**当前聚焦原版 28 复音固件的 C++ 翻译（M1–M3 直译已达成）。**
+  M4 计划对 voice/PCM 做语义化改写并支持 256 复音，但 **256 扩展已于 2026-09-11 回滚，
+  M4 暂缓**。
   **不产出独立可执行程序。**
 
 ## 1. 方法与边界
@@ -83,7 +85,16 @@ oracle：demo 200M 窗口 0 分歧；boot 3M 0 分歧。
 oracle：`s` 行 SM trace 与 GT 逐条一致（两模式 + 基线）；LCD 渲染与 GT 相同帧序列
 （`hash.lcd_state` 一致）。**已达成。**
 
-### M4 语义化 + 255 复音（容量 256）
+### M4 语义化 + 255 复音（容量 256）— 暂缓（2026-09-11 回滚 256 扩展）
+
+> **回滚说明（2026-09-11）**：256 复音扩展（`pcm_ext_*` 全局、`-voices:<n>`、
+> 0xE800 扩展窗口、page6/7 backing、`PCM_MAX_VOICE`/`PCM_EFF_BASE`/`PCM_SLOTS`、
+> 效果槽外置）已从 `src/` 回滚到原版 28 复音实现（对齐 `9c98ab9` 的 PCM 语义）。
+> 本节及 `docs/07–11` 描述的是**扩展模式的设计**，现为**暂缓记录**；
+> M4 语义化改写（`src/hand/`）若要重启，须基于原版 28 复音重新评估范围。
+> 当前 `src/hand/pcm_enable.cpp` 的 6 个 L0 覆盖只翻译 stock 28 的 PCM
+> enable/disable flush（不依赖任何 256 扩展），`native_pool.cpp` 固定用
+> `kLegacy=28`。
 
 交付分层：
 - **M4a 控制语义化**：`src/hand/` 把 voice/PCM 控制路径原生化（固件寄存器写 →
@@ -106,10 +117,10 @@ release 而非 alloc（分配器 = `pool_pop 0x19ad` + `link 0x194c`），`a3a0 
 - 音频 tap：`-wav:`/`-audiowin`/`-audiohash` 与 `-snapinfo`（`08`/`10`）；
 - 音频基线冻结（stock 300M–320M）与 ≥255 同时音 MIDI 素材（**待办，需用户**，`10` §6）。
 
-oracle（口径与 `10_m4_oracle.md` 一致）：
-- n=28：与 stock 音频输出 null 测试（容差 0 或书面量化误差）；
-- `-voices:255`（"256 复音"指容量）：长跑稳定、无复位、PCM 激活、CPU 占空比合理；
-  压力矩阵 n=32/64/128/255；
+oracle（口径与 `10_m4_oracle.md` 一致；**256 相关项随扩展回滚暂缓**）：
+- n=28：与 stock 音频输出 null 测试（容差 0 或书面量化误差）——**仍有效**；
+- ~~`-voices:255`（"256 复音"指容量）：长跑稳定、无复位、PCM 激活、CPU 占空比合理；
+  压力矩阵 n=32/64/128/255~~ **暂缓**（`-voices:` 已回滚）；
 - 与 `../tools/docs/task_irq_map.md` §4 的 O1–O10 验收矩阵一致；
 - 音频/听感窗口 ≥300M，状态 ≥200M；超时 = ceil(终点/24e6×2)+15s。
 

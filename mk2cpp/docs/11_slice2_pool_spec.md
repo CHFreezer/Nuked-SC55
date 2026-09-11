@@ -1,5 +1,10 @@
 # 11 M4 slice-2 规格：voice pool-init + release/free 原生化
 
+> **暂缓（2026-09-11）**：本文的 N=255 口径（`pcm_ext_voices`、slot 255 哨兵、
+> 256-bit mask）随 256 扩展回滚**暂缓**。`src/hand/native_pool.cpp` 当前固定
+> `kLegacy=28`（`pool_post_reset` 不再读取 `pcm_ext_voices`）；pool-init/release/free
+> 的原生语义分析仍有效，重启须基于原版 28 复音。
+
 状态：已评审 v1，2026-09-11。
 配套文档：[07 voice 语义](07_m4_voice_spec.md) · [09 hand 覆盖表与集成](09_m4_integration.md) · [10 验收 oracle](10_m4_oracle.md) · [00 计划](00_plan.md)。
 口径：验收统一 `-voices:255`（"256 复音"指容量；slot 255 保留 `0xff` 哨兵，活性上限 255）；

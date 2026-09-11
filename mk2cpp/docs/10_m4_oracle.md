@@ -1,5 +1,9 @@
 # 10 M4 验收 oracle 工具链
 
+> **暂缓（2026-09-11）**：本文的 `-voices:255` 压力矩阵（n=32/64/128/255）、
+> `pcm.ext_voices` 判据、O4/S4 的 `cfg3d=0x7b + ext_voices` 期望随 256 扩展回滚
+> **暂缓**。n=28 音频 null（`m4_audio_null.ps1`）与音频/状态窗口口径仍有效。
+
 状态：已评审 v1，2026-09-11。
 配套文档：[07 voice 语义](07_m4_voice_spec.md) · [08 PCM 引擎与音频路径](08_m4_pcm_api.md) · [09 hand 覆盖表与集成](09_m4_integration.md) · [00 计划](00_plan.md)。
 阅读顺序：00_plan §M4 → 07 → 08 → 09 → **10（验收）**。

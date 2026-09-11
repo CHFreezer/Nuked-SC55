@@ -11,10 +11,15 @@ completed trace window and then force-kills the process. It is pure PowerShell
 
 ## M4 oracle scripts (Wave 0c)
 
+> **回滚说明（2026-09-11）**：256 复音扩展（`-voices:<n>` 等）已从 GT 回滚到原版
+> 28 复音实现。`m4_stress_voices.ps1`（n=32/64/128/255）所依赖的 `-voices:` 现已无效，
+> 该脚本**暂缓**（当前运行会静默按 28 复音跑，结果不代表压力测试）。
+> `m4_audio_null.ps1` 的 n=28 音频 null 仍有效（`-voices:28` 现为 no-op，等价默认 28）。
+
 | Script | Purpose | Real GT run? |
 |---|---|---|
-| `m4_audio_null.ps1` | n=28 audio null: stock vs `-mk2cpp -voices:28` (`[300M,320M)` WAV payload / `-audiohash` / state scalars); optional `-HandOff` same-binary A/B | only with `-Execute -UserPresent` |
-| `m4_stress_voices.ps1` | n=32/64/128/255 matrix (capacity 256, accepted cap 255) with S1-S7 parsing and the O1-O10 mapping (`cfg3d=0x7b` + `pcm.ext_voices=n` via `-snapinfo`, plan A per `out/m4/12_cfg3d_voice_count.md`); MIDI material from `mk2cpp\out\m4\corpus\` | only with `-Execute -UserPresent` |
+| `m4_audio_null.ps1` | n=28 audio null: stock vs `-mk2cpp`（`-voices:28` 已回滚为 no-op，等价默认 28；`[300M,320M)` WAV payload / `-audiohash` / state scalars）；可选 `-HandOff` 同二进制 A/B | only with `-Execute -UserPresent` |
+| `m4_stress_voices.ps1` | ~~n=32/64/128/255 矩阵~~ **暂缓**（`-voices:` 已回滚）；原 S1-S7 解析与 O1-O10 映射（`cfg3d=0x7b` + `pcm.ext_voices=n`）随 256 扩展暂缓 | 暂缓 |
 | `two_mode_check.ps1` | M1-M3 default-path regression (trace/hash, `SDL_*_DRIVER=dummy`) | headless by design, unchanged |
 
 Hard boundaries for the M4 scripts:
@@ -28,7 +33,8 @@ Hard boundaries for the M4 scripts:
 - Timeout is `ceil(end_cycles/24e6 * 2) + 15` s (320M -> 42 s, 400M -> 49 s);
   the process is `Stop-Process -Force`d in a `finally` block.
 - Automated = file/stream comparison and judgement parsing. Manual = LCD
-  observation, n=28 A/B listen, 255-voice dropped-note/crackle listen; SKIP is
+  observation, n=28 A/B listen, ~~255-voice dropped-note/crackle listen~~
+  （256 复音监听随扩展回滚暂缓）; SKIP is
   not PASS and a green summary never replaces the on-site listen.
 
 ### m4_audio_null.ps1

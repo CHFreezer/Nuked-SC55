@@ -138,15 +138,4 @@ void MK2CPP_HandFillTables(void)
 void MK2CPP_HandPostReset(void)
 {
     mk2c::pool_post_reset();
-
-    /* Extension activation (out/09 3.2, out/12 solution A): only under
-     * -mk2cpp and only for n != 28, so the stock switch matrix and the n=28
-     * null path stay untouched. reg_slots then comes from pcm_ext_voices
-     * (src/pcm.cpp) while config_reg_3d keeps its stock ROM-bank value 0x7b.
-     * Gated on the n=64 smoke under pcm_ext_active=1 (see the slice report). */
-    if (mk2cpp_enabled && pcm_ext_voices != 28)
-    {
-        pcm_ext_enabled = 1;
-        pcm_ext_active = 1;
-    }
 }

@@ -1,5 +1,10 @@
 # 08 M4 PCM 引擎与音频路径规格
 
+> **暂缓（2026-09-11）**：本文引用的 256 扩展点（`PCM_EFF_BASE`/`PCM_MAX_VOICE`/
+> `PCM_WriteExt`/0xE800 窗口/`pcm_ext_active`/效果槽外置/`cycles` 钳 28）已从 `src/`
+> 回滚到原版 28 复音实现。GT PCM 引擎地图（§1）与音频 tap（`-wav`/`-audiowin`/
+> `-audiohash`，仍保留）仍有效；扩展模式相关的 API 与"阶段 1 重定位等价"设计**暂缓**。
+
 状态：已评审 v1，2026-09-11。
 配套文档：[07 voice 语义](07_m4_voice_spec.md) · [09 hand 覆盖表与集成](09_m4_integration.md) · [10 验收 oracle](10_m4_oracle.md) · [00 计划](00_plan.md)。
 阅读顺序：00_plan §M4 → 07 → **08（PCM/音频）** → 09 → 10。

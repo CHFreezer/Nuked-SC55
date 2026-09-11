@@ -186,9 +186,6 @@ int mcu_jv880 = 0; // 0 - SC-55, 1 - JV880
 int mcu_scb55 = 0; // 0 - sub mcu (e.g SC-55mk2), 1 - no sub mcu (e.g SCB-55)
 int mcu_sc155 = 0; // 0 - SC-55(MK2), 1 - SC-155(MK2)
 int pcm_float = 0; // S1: pure-float resonant filter, per-add ±1.0 saturation (independent of chip select)
-int pcm_ext_enabled = 0; // 0 - stock 28-voice behavior; 1 - polyphony extension (in-memory ROM patch, -voices:<n>)
-int pcm_ext_voices = 28; // extended-mode target voice count (28..PCM_MAX_VOICE)
-int pcm_ext_active = 0;  // 1 once the in-memory ROM patch has actually been applied (see MCU_PatchROM)
 float master_gain = 1.0f; // overall output volume multiplier (linear), applied in MCU_PostSample before int16 clamp
 
 static int ga_int[8];
@@ -232,9 +229,7 @@ static const char *tracepc_file = nullptr;
 static uint64_t tracepc_start = 200000000, tracepc_end = 210000000;
 
 // (-pcmtrace): log PCM control-register writes (voice_enable 0x00-03, config
-// 0x3c/3d, select_channel 0x3e, 0x3f effect alias in extended mode), the
-// 0xE800 extension writes and the 0xE820/0xE821 extension reads with the H8
-// PC, to pcm_trace.log.
+// 0x3c/3d, select_channel 0x3e) with the H8 PC, to pcm_trace.log.
 static bool g_pcm_trace = false;
 
 // ---- unified PC trace (main + SM in ONE file), owned by the main MCU. ----
@@ -657,22 +652,11 @@ uint8_t ram[RAM_SIZE];
 uint8_t sram[SRAM_SIZE];
 uint8_t nvram[NVRAM_SIZE];
 uint8_t cardram[CARDRAM_SIZE];
-static uint8_t b_ram[0x10000];  // polyphony extension: 64KB backing for H8 page 6 (tp=6)
-static uint8_t b_ram2[0x10000]; // polyphony extension: 64KB backing for H8 page 7 (tp=7)
-
-
 int rom2_mask = ROM2_SIZE - 1;
 
-// (-pcmtrace) log helper shared by the stock window, the extension window and
-// extended reads. Line formats:
-//   stock write / 0x3f effect alias : "pcm reg=%02x val=%02x pc=%02x:%04x cyc=%llu"
-//   ext write                       : "pcm ext reg=%02x val=%02x pc=... cyc=..."
-//   ext read                        : "pcm ext read reg=%02x val=%02x pc=... cyc=..."
-// The ext-write line stays compatible with the m4_stress_voices.ps1 parser;
-// reads use a distinct line type so they are never mistaken for ext writes.
 static FILE *g_pcm_trace_f = nullptr;
 
-static void pcm_trace_log(uint32_t reg, uint8_t val, int ext, int read)
+static void pcm_trace_log(uint32_t reg, uint8_t val)
 {
     if (!g_pcm_trace_f)
     {
@@ -682,16 +666,9 @@ static void pcm_trace_log(uint32_t reg, uint8_t val, int ext, int read)
     }
     if (!g_pcm_trace_f)
         return;
-    if (ext)
-        fprintf(g_pcm_trace_f, read
-                ? "pcm ext read reg=%02x val=%02x pc=%02x:%04x cyc=%llu\n"
-                : "pcm ext reg=%02x val=%02x pc=%02x:%04x cyc=%llu\n",
-                (int)reg, (int)val, (int)mcu.cp, (int)mcu.pc,
-                (unsigned long long)mcu.cycles);
-    else
-        fprintf(g_pcm_trace_f, "pcm reg=%02x val=%02x pc=%02x:%04x cyc=%llu\n",
-                (int)reg, (int)val, (int)mcu.cp, (int)mcu.pc,
-                (unsigned long long)mcu.cycles);
+    fprintf(g_pcm_trace_f, "pcm reg=%02x val=%02x pc=%02x:%04x cyc=%llu\n",
+            (int)reg, (int)val, (int)mcu.cp, (int)mcu.pc,
+            (unsigned long long)mcu.cycles);
 }
 
 static uint8_t MCU_Read_impl(uint32_t address)
@@ -715,15 +692,6 @@ static uint8_t MCU_Read_impl(uint32_t address)
                 if (address >= base && address < (base | 0x400))
                 {
                     ret = PCM_Read(address & 0x3f);
-                }
-                else if (pcm_ext_active && !mcu_jv880 && address >= 0xe800 && address < 0xe840)
-                {
-                    uint32_t reg = address & 0x3f;
-                    ret = PCM_ReadExt(reg);
-                    // O7/S7 evidence: log the full IRQ slot read (0xE820) and
-                    // the ext-active probe (0xE821).
-                    if (g_pcm_trace && (reg == 0x20 || reg == 0x21))
-                        pcm_trace_log(reg, ret, 1, 1);
                 }
                 else if (!mcu_scb55 && address >= 0xec00 && address < 0xf000)
                 {
@@ -878,15 +846,6 @@ static uint8_t MCU_Read_impl(uint32_t address)
         else
             ret = 0xff;
         break;
-    case 6:
-        // Polyphony extension: 64KB extended RAM page (reached via tp=6).
-        // Stock ROM never touches it; gated so default behavior is unchanged.
-        ret = pcm_ext_enabled ? b_ram[address] : 0x00;
-        break;
-    case 7:
-        // Polyphony extension: second 64KB extended RAM page (reached via tp=7).
-        ret = pcm_ext_enabled ? b_ram2[address] : 0x00;
-        break;
     default:
         ret = 0x00;
         break;
@@ -972,16 +931,10 @@ void MCU_Write(uint32_t address, uint8_t value)
                     if (g_pcm_trace)
                     {
                         uint32_t reg = address & 0x3f;
-                        if ((reg <= 3) || reg == 0x3c || reg == 0x3d || reg == 0x3e || reg == 0x3f)
-                            pcm_trace_log(reg, value, 0, 0);
+                        if ((reg <= 3) || reg == 0x3c || reg == 0x3d || reg == 0x3e)
+                            pcm_trace_log(reg, value);
                     }
                     PCM_Write(address & 0x3f, value);
-                }
-                else if (pcm_ext_active && !mcu_jv880 && address >= 0xe800 && address < 0xe840)
-                {
-                    if (g_pcm_trace)
-                        pcm_trace_log(address & 0x3f, value, 1, 0);
-                    PCM_WriteExt(address & 0x3f, value);
                 }
                 else if (!mcu_scb55 && address >= 0xec00 && address < 0xf000)
                 {
@@ -1087,14 +1040,6 @@ void MCU_Write(uint32_t address, uint8_t value)
     else if (page == 14 && mcu_jv880)
     {
         cardram[address & 0x7fff] = value; // FIXME
-    }
-    else if (page == 7 && pcm_ext_enabled)
-    {
-        b_ram2[address] = value;
-    }
-    else if (page == 6 && pcm_ext_enabled)
-    {
-        b_ram[address] = value;
     }
     else
     {
@@ -1678,9 +1623,8 @@ static void snapinfo_write(void)
         if (mcu.interrupt_pending[i])
             pend |= 1u << i;
     uint32_t mask_pop = 0;
-    for (int i = 0; i < 32; i++)
     {
-        uint8_t v = pcm.voice_mask[i];
+        uint32_t v = pcm.voice_mask;
         while (v)
         {
             mask_pop += (v & 1u);
@@ -1702,7 +1646,6 @@ static void snapinfo_write(void)
     fprintf(f, "pcm.irq_assert = %u\n", (unsigned)pcm.irq_assert);
     fprintf(f, "pcm.config_reg_3c = %02x\n", (unsigned)pcm.config_reg_3c);
     fprintf(f, "pcm.config_reg_3d = %02x\n", (unsigned)pcm.config_reg_3d);
-    fprintf(f, "pcm.ext_voices = %d\n", pcm_ext_voices);
     fprintf(f, "voice_mask_popcount = %u\n", (unsigned)mask_pop);
     fclose(f);
     printf("snapinfo: wrote %s at c%llu (isr4fe=%llu)\n", g_snapinfo_file,
@@ -2123,10 +2066,6 @@ static void MCU_Run()
 void MCU_PatchROM(void)
 {
 
-    // Polyphony extension (-voices:<n>): the in-memory ROM patch is applied
-    // here once implemented (see tools/docs/polyphony_255_feasibility.md).
-    // pcm_ext_active stays 0 until the patch content is actually in place, so
-    // that GT keeps stock behavior for a flag without a working patch.
     //rom2[0x1333] = 0x11;
     //rom2[0x1334] = 0x19;
     //rom1[0x622d] = 0x19;
@@ -2460,19 +2399,6 @@ int main(int argc, char *argv[])
             {
                 pcm_float = 1;
             }
-            else if (!strncmp(argv[i], "-voices:", 8))
-            {
-                int n = atoi(argv[i] + 8);
-                if (n < 28 || n > PCM_MAX_VOICE)
-                {
-                    fprintf(stderr, "warning: -voices:%d out of range (28..%d), ignored\n", n, PCM_MAX_VOICE);
-                }
-                else
-                {
-                    pcm_ext_voices = n;
-                    pcm_ext_enabled = (n != 28);
-                }
-            }
             else if (!strcmp(argv[i], "-demo"))
             {
                 demo_seq_enabled = true;
@@ -2724,13 +2650,9 @@ int main(int argc, char *argv[])
                        "                                 dispatch count, sleep/iml/pend, pcm.select_channel,\n"
                        "                                 pcm.irq_channel and the voice-mask popcount.\n");
                 printf("\n");
-                printf("Polyphony extension / native core:\n");
-                printf("  -voices:<n>                    Set the target polyphony to <n> voices (default 28,\n"
-                       "                                 range 28..255). n == 28 keeps stock behavior; n != 28\n"
-                       "                                 requests the extended engine path in the emulator (the\n"
-                       "                                 disk ROM is never modified).\n");
+                printf("Native core:\n");
                 printf("  -mk2cpp                        Use the translated mk2cpp core when linked (mixed with\n"
-                       "                                 the GT interpreter as needed).\n");
+                        "                                 the GT interpreter as needed).\n");
                 printf("  -mk2cpp-hand:0|1               Enable (1, default) or skip (0) the M4 native hand\n"
                        "                                 table for the same-binary A/B gate.\n");
                 return 0;
