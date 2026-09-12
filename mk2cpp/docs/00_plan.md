@@ -1,8 +1,8 @@
 # mk2cpp 计划（M1–M5）
 
 状态：M1 ✅ M2 ✅ M3 ✅（2026-09-11，直译）；M4 语义化改写（stock 28）进行中
-（2026-09-12 覆盖翻译完成并逐字节验证：4239 PC、closure−gen−hand=0、82/82
-曲目一致；**语义化与模块化未完成**：hand 主体仍为逐指令 case 表）；M5（256
+（2026-09-12 覆盖翻译完成并逐字节验证：4239 PC、closure−gen−hand=0、全量
+曲目一致（数量见本机 local.md）；**语义化与模块化未完成**：hand 主体仍为逐指令 case 表）；M5（256
 复音扩展）已回滚暂缓（2026-09-11）。里程碑口径：M4 = ROM 全量 C++ 翻译的
 语义层收尾；M5 = 在翻译目标之外新增 256 复音能力的研究。
 依据：`../tools/docs/`（证据协议、voice_memory_map、voice_bounds_inventory、
@@ -112,8 +112,8 @@ boot/demo 各窗口 trace+hash 与基线一致；多场景压力与休眠臂对�
 **覆盖与剩余（2026-09-12）**：静态可达闭包全部 hand 化（`closure−gen−hand = 0`，
 hand 共 4239 PC）；闭包内 3 簇动态间接目标（interp `0x3A5A-0x3A9D`、pool 续段
 `0x4062B-0x406E2`、命令环 handler `0x625-0x673`，共 99 PC）已补译；
-**82/82 唯一 MIDI 曲目两模式逐字节 MATCH**（含 037/040 整曲与超长曲尾部，见
-`out/m4/29/31/32/37_*.md`）；剩 185 个闭包外动态 PC（14 簇：事件环 `a4d0/a7d0`、
+**全量唯一 MIDI 曲目两模式逐字节 MATCH**（含两首指定整曲与超长曲尾部，见
+`out/m4/29/31/32/37_*.md`；数量与曲目见本机 local.md）；剩 185 个闭包外动态 PC（14 簇：事件环 `a4d0/a7d0`、
 part 复位/参数、主事件循环回边等非 voice 子系统）与死字节/竞态不可达臂由 mixed 回退，
 既有 trace 两模式逐行一致（`out/m4/33_dynamic_class.md`）。快照审查
 （`out/m4/27_snapshot_status.md`）确认 hand 层无私有仿真状态，GT `state_save/load`
@@ -128,11 +128,11 @@ M4 收口三步：(1) 宿主指令边界回调（每步中断轮询/cycles/trace
 可重入点，支撑整例程语义写法而不破坏时序）；(2) 语义重写（`pcm_misc.cpp`
 13,950 行/1,130 case 垃圾桶已于 2026-09-12 拆分为 `pcm_irq_service`/
 `pcm_fraction_div`/`note_on_setup`/`pitch_env`/`voice_param`/`ts_scan`/
-`cmd_ring` 七个例程模块，拆分后 040 整曲与拆分前逐字节一致；`shared_misc.cpp`
+`cmd_ring` 七个例程模块，拆分后指定整曲与拆分前逐字节一致；`shared_misc.cpp`
 同日拆分为 `dsp_rate_common`/`maint_fill_d1de`/`maint_merge_d1cd`/
 `maint_counter_d1d5`/`maint_voice_gate_d1ff`/`maint_table_walk_d1d6`/
 `maint_bit_scan_d1cc`/`shared_nop_rts` 八个例程模块，共享 H8 原语提取为
-`hand_prims.h`，040 整曲同样逐字节一致；其余模块做
+`hand_prims.h`，指定整曲同样逐字节一致；其余模块做
 命名审计与全量语义重写）；(3) 正式 oracle：`tests/m4_audio_null.py --execute --user-present
 -CheckBaseline`（含用户在场听感，尚未执行）。
 

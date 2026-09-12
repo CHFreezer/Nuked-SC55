@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Default fast regression gate for mk2cpp hand/voice changes (cross-platform).
 
-Runs the designated external-MIDI song (037 by default) in both modes
+Runs the designated external-MIDI song (see local.md) in both modes
 (stock ``-mk2`` vs ``-mk2 -mk2cpp``) concurrently and compares the full WAV
 byte-for-byte (SHA256). Hard timeout, dummy SDL audio/video drivers.
 
@@ -9,8 +9,9 @@ byte-for-byte (SHA256). Hard timeout, dummy SDL audio/video drivers.
 (window [144M, 1440M) cycles, 144M skips the boot animation; the full 5-song
 playlist is never run by default).
 
-Scope policy: 037 is the only external-MIDI regression song -- do not run the
-song corpus or the stress matrix unless the user explicitly asks.
+Scope policy: the designated song (local.md) is the only external-MIDI
+regression song -- do not run the song corpus or the stress matrix unless the
+user explicitly asks.
 
 Portability: Python 3 standard library only (no bundled interpreter), no
 platform-specific paths; GT executable is auto-detected per platform and can
@@ -20,7 +21,7 @@ Usage::
 
     python3 mk2cpp/tests/m4_quick_gate.py
     python3 mk2cpp/tests/m4_quick_gate.py --demo
-    python3 mk2cpp/tests/m4_quick_gate.py --sched path/to/midi037.sched
+    python3 mk2cpp/tests/m4_quick_gate.py --sched path/to/<song>.sched
     python3 mk2cpp/tests/m4_quick_gate.py --exe build/Release/nuked-sc55
 
 Exit codes: 0 = PASS (hashes equal), 1 = FAIL, 2 = setup error.
@@ -80,8 +81,8 @@ def tail_cycle(sched: pathlib.Path) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--sched", default=str(REPO_ROOT / "mk2cpp" / "out" / "m4" / "corpus" / "midi037.sched"),
-                    help="schedule file (default: corpus/midi037.sched)")
+    ap.add_argument("--sched", default=str(REPO_ROOT / "mk2cpp" / "out" / "m4" / "corpus" / "regression.sched"),
+                    help="schedule file (default: corpus/regression.sched)")
     ap.add_argument("--demo", action="store_true", help="run the built-in demo instead of an external MIDI schedule")
     ap.add_argument("--start", type=int, default=200_000_000, help="audio window start cycle (MIDI mode)")
     ap.add_argument("--demo-start", type=int, default=144_000_000, help="demo window start (default 144M)")
@@ -108,7 +109,7 @@ def main() -> int:
         sched = pathlib.Path(args.sched)
         if not sched.exists():
             print(f"ERROR: schedule missing: {sched}", file=sys.stderr)
-            print("       generate it with mk2cpp/tools/midisched from the 037 SMF, or pass --sched.", file=sys.stderr)
+            print("       generate it with mk2cpp/tools/midisched from the designated SMF (see local.md), or pass --sched.", file=sys.stderr)
             return 2
         last = tail_cycle(sched)
         start, end = args.start, args.start + last + 2_000_000

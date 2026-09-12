@@ -8,7 +8,7 @@
 状态：已评审 v1，2026-09-11。
 > **更新注（2026-09-12）**：本文所述的 `tests/two_mode_check.py` 已由跨平台
 > `tests/two_mode_check.py` 取代（原 `.ps1` 与其 `gt_run.ps1` wrapper 内容已移植
-> 并删除）；`tests/m4_quick_gate.py` 为默认回归门禁（037，约 65 s）。本机专用
+> 并删除）；`tests/m4_quick_gate.py` 为默认回归门禁（指定回归曲，约 65 s）。本机专用
 > 路径见仓库根 `local.md`（每用户本地、不入库）。
 配套文档：[07 voice 语义](07_m4_voice_spec.md) · [08 PCM 引擎与音频路径](08_m4_pcm_api.md) · [09 hand 覆盖表与集成](09_m4_integration.md) · [00 计划](00_plan.md)。
 阅读顺序：00_plan §M4 → 07 → 08 → 09 → **10（验收）**。

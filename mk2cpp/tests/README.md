@@ -4,7 +4,8 @@ Oracle scripts for the mk2cpp integration. **Canonical, cross-platform
 implementations are the Python 3 scripts** (standard library only, no bundled
 interpreter):
 
-- `m4_quick_gate.py` — default regression: 037 in both modes, full-WAV SHA256.
+- `m4_quick_gate.py` — default regression: the designated song (see local.md)
+  in both modes, full-WAV SHA256.
 - `two_mode_check.py` — scenario regression: stock vs `-mk2cpp` traces/hashes
   plus the frozen `tools/baselines` fixtures.
 
@@ -23,16 +24,16 @@ M5 restarts). The Python scripts are the only gate.
 
 ## 默认回归口径（2026-09-12 起，用户要求）
 
-- **指定回归曲 = 037**（外部 MIDI 测试冻结在这一首；曲子足够复杂，覆盖绝大
-  部分行为）。**不再默认或半默认测其他曲子**。默认回归 =
-  `python3 mk2cpp/tests/m4_quick_gate.py`（037 两模式并行 + WAV 逐字节，约 65 s）；
+- **指定回归曲**（曲目见本机 local.md；外部 MIDI 测试冻结在这一首，曲子足够
+  复杂，覆盖绝大部分行为）。**不再默认或半默认测其他曲子**。默认回归 =
+  `python3 mk2cpp/tests/m4_quick_gate.py`（回归曲两模式并行 + WAV 逐字节，约 65 s）；
   改动主链路/非 voice 路径时再跑
   `python3 mk2cpp/tests/two_mode_check.py --scenario boot|demo200`（各 1–2 分钟）。
 - **demo 预算 = 60 秒模拟时间**：`m4_quick_gate.py --demo`（窗口
   `[144M, 1440M)` cycles，144M 起跳过开机动画，墙钟约 61 s）。内置 demo 有 5 首曲，
   **永远不默认跑完整播放列表**；`two_mode_check.py --scenario demo200` 的
   `[200M,202M)` 只是 2M-cycle 冻结 fixture（秒级），两者用途不同、都不长跑。
-- **不默认跑 82 曲语料**（`out/m4/corpus/midi*.sched`）与压力矩阵
+- **不默认跑全量语料**（`out/m4/corpus/midi*.sched`，规模见 local.md）与压力矩阵
   （cov_mix/stress_*）：它们是代理侧扩展覆盖，不是用户要求；仅在用户明确
   要求"全量"时运行（8 并发约 30–40 分钟），且必须分批并汇报总耗时。
 - **单次前台测试预算 ≤3 分钟**；超过必须后台/分片，并先告知用户。长跑会
@@ -59,7 +60,7 @@ M5 restarts). The Python scripts are the only gate.
 | `m4_audio_null.py` | n=28 audio null: stock vs `-mk2cpp`（`-voices:28` 已回滚为 no-op，等价默认 28；`[300M,320M)` WAV payload / `-audiohash` / state scalars）；可选 `--hand-off` 同二进制 A/B、`--check-baseline` 冻结基准门禁（G6） | only with `--execute --user-present` |
 | （256 压力矩阵）| n=32/64/128/255（255 = 妥协上限，目标 256）**随 M5 暂缓**；原 `m4_stress_voices.ps1` 已删除，M5 重启时以 Python 重写 | 暂缓 |
 | `two_mode_check.py` | M1-M3 default-path regression (trace/hash, `SDL_*_DRIVER=dummy`, `-nomidi`); cross-platform | headless by design, unchanged |
-| `m4_quick_gate.py` | **默认回归**：037 两模式并行 WAV 逐字节（`-nomidi`，硬超时，约 65 s）；`--demo` 跑内置 demo 60 s 预算（`[144M,1440M)`，约 61 s）；`--sched` 可指定其他 schedule（仅调试用，默认冻结 037） | headless, no user needed |
+| `m4_quick_gate.py` | **默认回归**：回归曲两模式并行 WAV 逐字节（`-nomidi`，硬超时，约 65 s）；`--demo` 跑内置 demo 60 s 预算（`[144M,1440M)`，约 61 s）；`--sched` 可指定其他 schedule（仅调试用，默认冻结回归曲） | headless, no user needed |
 
 Hard boundaries for the M4 scripts:
 
@@ -92,7 +93,7 @@ python3 mk2cpp/tests/m4_audio_null.py --check-baseline --execute --user-present
 
 # MIDI-driven variant and W3 gate-5 A/B (schedule path from local.md)
 python3 mk2cpp/tests/m4_audio_null.py --scenario midi \
-    --midi-schedule mk2cpp/out/m4/corpus/midi037.sched --hand-off \
+    --midi-schedule mk2cpp/out/m4/corpus/regression.sched --hand-off \
     --execute --user-present
 ```
 

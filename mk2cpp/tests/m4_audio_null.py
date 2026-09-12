@@ -40,7 +40,7 @@ Usage::
     python3 mk2cpp/tests/m4_audio_null.py --execute --user-present
     python3 mk2cpp/tests/m4_audio_null.py --check-baseline --execute --user-present
     python3 mk2cpp/tests/m4_audio_null.py --scenario midi \
-        --midi-schedule mk2cpp/out/m4/corpus/midi037.sched --hand-off \
+        --midi-schedule mk2cpp/out/m4/corpus/regression.sched --hand-off \
         --execute --user-present
 
 Exit codes: 0 = PASS/SKIP (automated part), 1 = FAIL, 2 = setup error.
