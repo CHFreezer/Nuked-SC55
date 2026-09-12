@@ -2246,19 +2246,37 @@ void MCU_PostSample(int *sample)
 {
     if (master_gain != 1.0f)
     {
-        sample[0] = (int)((float)sample[0] * master_gain);
-        sample[1] = (int)((float)sample[1] * master_gain);
+        /* Normalize raw (20-bit sample << 12) to +-1.0 (= 2^31), apply the
+         * gain, clamp, then scale to the int16 rail (x 2^16). Avoids the int32
+         * overflow of the old raw multiply. */
+        float l = (float)sample[0] * (1.0f / 2147483648.0f) * master_gain;
+        float r = (float)sample[1] * (1.0f / 2147483648.0f) * master_gain;
+        if (l > 1.0f)
+            l = 1.0f;
+        else if (l < -1.0f)
+            l = -1.0f;
+        if (r > 1.0f)
+            r = 1.0f;
+        else if (r < -1.0f)
+            r = -1.0f;
+        sample[0] = (int)floorf(l * 65536.0f);
+        sample[1] = (int)floorf(r * 65536.0f);
     }
-    sample[0] >>= 15;
+    else
+    {
+        sample[0] >>= 15;
+        sample[1] >>= 15;
+    }
+
     if (sample[0] > INT16_MAX)
         sample[0] = INT16_MAX;
     else if (sample[0] < INT16_MIN)
         sample[0] = INT16_MIN;
-    sample[1] >>= 15;
     if (sample[1] > INT16_MAX)
         sample[1] = INT16_MAX;
     else if (sample[1] < INT16_MIN)
         sample[1] = INT16_MIN;
+
     sample_buffer[sample_write_ptr + 0] = sample[0];
     sample_buffer[sample_write_ptr + 1] = sample[1];
     sample_write_ptr = (sample_write_ptr + 2) % audio_buffer_size;
