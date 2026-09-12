@@ -1,3 +1,13 @@
+# Notice: development and maintaining of this emulator has stopped
+Thanks to everyone who was using and enjoying it! You can use one of awesome forks like [the one from jcmoyer](https://github.com/jcmoyer/Nuked-SC55).
+
+This was my dream project for about a decade (since I got SC-55 unit in 2014) and culmination of my reverse-engineering works, and I'm glad I was able to pull it through.
+
+Unfortunately this project also caused me pretty severe burnout, so I decided to take a break from project back in 2024.
+This coupled with pressure to relicense the project and usage info/code from my code against my will/without permission or outright license violations, made me very hard to pick it back.
+
+So in 2026 decision was made to relicense the project to GPL2, archive the repository and completely cease any further work. Sorry if I disappointed anyone with this decision, but doing so is going be better to my mental health.
+
 # Nuked SC-55
 Roland SC-55 emulator, by nukeykt.
 
