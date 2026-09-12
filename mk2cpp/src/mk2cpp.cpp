@@ -7,6 +7,7 @@
  */
 #include "mk2cpp.h"
 #include "mcu.h"
+#include "mcu_interrupt.h"
 #include "submcu.h"
 
 #include <stdio.h>
@@ -141,6 +142,24 @@ void MK2CPP_HandRegister(uint32_t flat, mk2cpp_fn fn)
 void MK2CPP_HandRegisterRoutine(uint32_t flat, mk2cpp_hand_routine_fn fn)
 {
     mk2cpp_hand_insert(flat, NULL, fn, 1);
+}
+
+int MK2CPP_HandBoundary(void)
+{
+    uint16_t sp_before;
+    if (mcu.ex_ignore)
+    {
+        /* Mirrors the host loop: an ex_ignore set by the previous H8
+         * instruction is consumed by its next poll and nothing else runs. */
+        mcu.ex_ignore = 0;
+        return 0;
+    }
+    sp_before = mcu.r[7];
+    MCU_Interrupt_Handle();
+    /* Every trap/exception path pushes PC, CP and SR (MCU_Interrupt_Start), so
+     * the stack pointer moving is a reliable "an interrupt was taken" signal
+     * even when the vector target equals the current pc. */
+    return mcu.r[7] != sp_before;
 }
 
 static mk2cpp_fn mk2cpp_lookup(uint32_t flat)

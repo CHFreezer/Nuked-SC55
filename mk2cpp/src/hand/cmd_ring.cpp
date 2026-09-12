@@ -5,8 +5,9 @@
  * Split out of the former catch-all pcm_misc.cpp by ROM routine (2026-09-12,
  * M4 closure step 1). The per-PC case bodies below are an unchanged mechanical
  * move, so behavior is bit-identical. Current form: one L0 hand entry per
- * instruction PC; see pcm_irq_service.cpp for the L0 rationale and the
- * pending semantic rewrite (M4 closure step 2).
+ * instruction PC; see pcm_irq_service.cpp for the L0 rationale.
+ * M4 closure step 2 (semantic rewrite): one named void step function per PC,
+ * registered flat=pc/cp0 via MK2CPP_HandRegister.
  *
  * Semantics: the ring dispatcher at 0x5f0 (jsr r6) selects six per-state
  * handlers through the table at 0x5f4; the handlers drive voice/part work
@@ -16,9 +17,9 @@
  * Evidence: out/m4/33_dynamic_class.md 3.3; out/m4/35_pool_tail_status.md;
  * cov c=227,231,988. Confidence: C for bytes / S for state semantics.
  *
- * Registration: all PCs self-register via MK2CPP_HandRegisterRoutine from a
- * file-static initializer (hand_registry.h); no shared aggregator file is
- * edited and duplicate registration is fatal (mk2cpp.cpp).
+ * Registration: explicit MK2CPP_HandRegister entries in cmd_ring_fill, which
+ * self-registers from a file-static initializer (hand_registry.h); no shared
+ * aggregator file is edited and duplicate registration is fatal (mk2cpp.cpp).
  */
 
 #include <stdint.h>
@@ -38,204 +39,195 @@ void MCU_SetStatusCommon(uint32_t val, uint32_t siz);
 namespace mk2c {
 namespace {
 
-/* Fallback if a stray PC inside a registered block is ever reached: execute
- * the stock instruction through the interpreter operand table. */
-void stock_instruction(void)
+/* ---- effective addresses / flags ---------------------------------------- */
+
+uint32_t page_of(uint32_t reg)
 {
-    uint8_t op = MCU_ReadCodeAdvance();
-    MCU_Operand_Table[op](op);
+    if (reg >= 6)
+        return mcu.tp;
+    if (reg >= 4)
+        return mcu.ep;
+    return mcu.dp;
 }
 
-uint32_t step_cmd_ring(void)
+/* @rN+disp16: low 16 bits add and wrap, page from the register file. */
+uint32_t ea_r(uint32_t reg, uint16_t disp)
 {
-    switch (mcu.pc)
-    {
-
-    /* ---- ring ---- */
-    case 0x0625: /* pjsr #0x04:062b -- push 0x629,cp; pool 0x4062b */
-    {
-        MCU_PushStack(0x0629);
-        MCU_PushStack(mcu.cp);
-        mcu.cp = 0x04;
-        mcu.pc = 0x062b;
-    }
-    break;
-    case 0x0629: /* rts */
-    {
-        mcu.pc = 0x062a;
-        mcu.pc = MCU_PopStack();
-    }
-    break;
-    case 0x062a: /* pjsr #0x04:0674 -- push 0x62e,cp; pool 0x40674 */
-    {
-        MCU_PushStack(0x062e);
-        MCU_PushStack(mcu.cp);
-        mcu.cp = 0x04;
-        mcu.pc = 0x0674;
-    }
-    break;
-    case 0x062e: /* bsr16 -> 0x1ad3 (mask_acc) */
-    {
-        mcu.pc = 0x0631;
-        uint16_t disp = (uint16_t)(0x14 << 8);
-        disp |= (uint16_t)0xa2;
-        MCU_PushStack(mcu.pc);
-        mcu.pc += disp;
-    }
-    break;
-    case 0x0631: /* rts */
-    {
-        mcu.pc = 0x0632;
-        mcu.pc = MCU_PopStack();
-    }
-    break;
-    case 0x0632: /* MOVG #0xff -> @r3+0xa050 */
-    {
-        mcu.pc = 0x0637;
-        uint32_t odisp = (uint32_t)0xa0;
-        odisp = (odisp << 8) | (uint32_t)0x50;
-        uint32_t oea = (uint32_t)mcu.r[3] + odisp;
-        oea &= 0xffff;
-        uint32_t oep = (uint32_t)(MCU_GetPageForRegister(3) & 0xff);
-        uint8_t op2 = 0x06;
-        uint32_t d = (uint32_t)(int8_t)0xff;
-        MCU_Write(MCU_GetAddress((uint8_t)oep, (uint16_t)oea), (uint8_t)(d));
-        MCU_SetStatusCommon(d, 0);
-    }
-    break;
-    case 0x0637: /* BSET @r3+0xa060 #0 */
-    {
-        mcu.pc = 0x063b;
-        uint32_t odisp = (uint32_t)0xa0;
-        odisp = (odisp << 8) | (uint32_t)0x60;
-        uint32_t oea = (uint32_t)mcu.r[3] + odisp;
-        oea &= 0xffff;
-        uint32_t oep = (uint32_t)(MCU_GetPageForRegister(3) & 0xff);
-        uint8_t op2 = 0xc0;
-        uint32_t data = (uint32_t)MCU_Read(MCU_GetAddress((uint8_t)oep, (uint16_t)oea));
-        uint32_t bit = 0;
-        MCU_SetStatus((data & (1u << bit)) == 0, STATUS_Z);
-        data |= 1u << bit;
-        MCU_Write(MCU_GetAddress((uint8_t)oep, (uint16_t)oea), (uint8_t)(data));
-    }
-    break;
-    case 0x063b: /* rts */
-    {
-        mcu.pc = 0x063c;
-        mcu.pc = MCU_PopStack();
-    }
-    break;
-    case 0x063c: /* CLR @r3+0xa060 */
-    {
-        mcu.pc = 0x0640;
-        uint32_t odisp = (uint32_t)0xa0;
-        odisp = (odisp << 8) | (uint32_t)0x60;
-        uint32_t oea = (uint32_t)mcu.r[3] + odisp;
-        oea &= 0xffff;
-        uint32_t oep = (uint32_t)(MCU_GetPageForRegister(3) & 0xff);
-        uint8_t op2 = 0x13;
-        MCU_Write(MCU_GetAddress((uint8_t)oep, (uint16_t)oea), (uint8_t)(0));
-        MCU_SetStatus(0, STATUS_N);
-        MCU_SetStatus(1, STATUS_Z);
-        MCU_SetStatus(0, STATUS_V);
-        MCU_SetStatus(0, STATUS_C);
-    }
-    break;
-    case 0x0640: /* rts */
-    {
-        mcu.pc = 0x0641;
-        mcu.pc = MCU_PopStack();
-    }
-    break;
-    case 0x0653: /* bsr16 -> 0x14ad */
-    {
-        mcu.pc = 0x0656;
-        uint16_t disp = (uint16_t)(0x0e << 8);
-        disp |= (uint16_t)0x57;
-        MCU_PushStack(mcu.pc);
-        mcu.pc += disp;
-    }
-    break;
-    case 0x0656: /* rts */
-    {
-        mcu.pc = 0x0657;
-        mcu.pc = MCU_PopStack();
-    }
-    break;
-    case 0x0660: /* CLR @r3+0xa060 */
-    {
-        mcu.pc = 0x0664;
-        uint32_t odisp = (uint32_t)0xa0;
-        odisp = (odisp << 8) | (uint32_t)0x60;
-        uint32_t oea = (uint32_t)mcu.r[3] + odisp;
-        oea &= 0xffff;
-        uint32_t oep = (uint32_t)(MCU_GetPageForRegister(3) & 0xff);
-        uint8_t op2 = 0x13;
-        MCU_Write(MCU_GetAddress((uint8_t)oep, (uint16_t)oea), (uint8_t)(0));
-        MCU_SetStatus(0, STATUS_N);
-        MCU_SetStatus(1, STATUS_Z);
-        MCU_SetStatus(0, STATUS_V);
-        MCU_SetStatus(0, STATUS_C);
-    }
-    break;
-    case 0x0664: /* MOVG #0xff -> @r3+0xa050 */
-    {
-        mcu.pc = 0x0669;
-        uint32_t odisp = (uint32_t)0xa0;
-        odisp = (odisp << 8) | (uint32_t)0x50;
-        uint32_t oea = (uint32_t)mcu.r[3] + odisp;
-        oea &= 0xffff;
-        uint32_t oep = (uint32_t)(MCU_GetPageForRegister(3) & 0xff);
-        uint8_t op2 = 0x06;
-        uint32_t d = (uint32_t)(int8_t)0xff;
-        MCU_Write(MCU_GetAddress((uint8_t)oep, (uint16_t)oea), (uint8_t)(d));
-        MCU_SetStatusCommon(d, 0);
-    }
-    break;
-    case 0x0669: /* bsr16 -> 0x151e (scan_b) */
-    {
-        mcu.pc = 0x066c;
-        uint16_t disp = (uint16_t)(0x0e << 8);
-        disp |= (uint16_t)0xb2;
-        MCU_PushStack(mcu.pc);
-        mcu.pc += disp;
-    }
-    break;
-    case 0x066c: /* pjsr #0x04:0674 -- push 0x670,cp; pool 0x40674 */
-    {
-        MCU_PushStack(0x0670);
-        MCU_PushStack(mcu.cp);
-        mcu.cp = 0x04;
-        mcu.pc = 0x0674;
-    }
-    break;
-    case 0x0670: /* bsr16 -> 0x1ad3 (mask_acc) */
-    {
-        mcu.pc = 0x0673;
-        uint16_t disp = (uint16_t)(0x14 << 8);
-        disp |= (uint16_t)0x60;
-        MCU_PushStack(mcu.pc);
-        mcu.pc += disp;
-    }
-    break;
-    case 0x0673: /* rts */
-    {
-        mcu.pc = 0x0674;
-        mcu.pc = MCU_PopStack();
-    }
-    break;
-    default:
-        stock_instruction();
-        break;
-    }
-    return 1;
+    return ((uint32_t)page_of(reg) << 16) | (uint16_t)(mcu.r[reg] + disp);
 }
 
-/* cmd_ring: 18 PCs -> step_cmd_ring */
-const uint16_t kCmdRingPcs[] = {
-    0x625, 0x629, 0x62a, 0x62e, 0x631, 0x632, 0x637, 0x63b, 0x63c, 0x640,
-    0x653, 0x656, 0x660, 0x664, 0x669, 0x66c, 0x670, 0x673,
-};
+void flags_clr(void)
+{
+    MCU_SetStatus(0, STATUS_N);
+    MCU_SetStatus(1, STATUS_Z);
+    MCU_SetStatus(0, STATUS_V);
+    MCU_SetStatus(0, STATUS_C);
+}
+
+/* ---- byte / stack / control-flow primitives ------------------------------ */
+
+/* MOVG #imm8 -> @rN+disp16 (GT opcode 6, siz 0). */
+void mov_imm8_mem(uint32_t addr, int32_t imm)
+{
+    uint32_t data = (uint32_t)imm;
+    MCU_Write(addr, (uint8_t)data);
+    MCU_SetStatusCommon(data, 0);
+}
+
+/* BSET @mem #bit: Z = bit was clear, then set it. */
+void bset(uint32_t addr, uint32_t bit)
+{
+    uint32_t data = MCU_Read(addr);
+    MCU_SetStatus((data & (1u << bit)) == 0, STATUS_Z);
+    data |= 1u << bit;
+    MCU_Write(addr, (uint8_t)data);
+}
+
+/* CLR @mem byte: write 0; N=0 Z=1 V=0 C=0. */
+void clr8_mem(uint32_t addr)
+{
+    MCU_Write(addr, 0);
+    flags_clr();
+}
+
+/* pjsr #page:target: push the return pc and the current cp, then switch. */
+void pjsr(uint8_t page, uint16_t next, uint16_t target)
+{
+    MCU_PushStack(next);
+    MCU_PushStack(mcu.cp);
+    mcu.cp = page;
+    mcu.pc = target;
+}
+
+/* bsr16: push the return pc, jump to the target. */
+void call(uint16_t next, uint16_t target)
+{
+    MCU_PushStack(next);
+    mcu.pc = target;
+}
+
+void ret(void)
+{
+    mcu.pc = MCU_PopStack();
+}
+
+/* ======================================================================== */
+/* command-ring state handlers, 18 PCs (cp0, flat = pc; states 08/0A/0C/0E/  */
+/* 12/16 from the table at 0x5f4)                                           */
+/* ======================================================================== */
+
+/* 0x0625 state 08: pjsr #0x04:0x062b (pool scan E); returns to 0x0629. */
+void step_cmd_ring_state08_pjsr_pool_scan(void)
+{
+    pjsr(0x04, 0x0629, 0x062b);
+}
+
+/* 0x0629 state 08: rts. */
+void step_cmd_ring_state08_rts(void)
+{
+    ret();
+}
+
+/* 0x062a state 0A: pjsr #0x04:0x0674 (pool kill/release F); returns 0x062e. */
+void step_cmd_ring_state0a_pjsr_pool_kill(void)
+{
+    pjsr(0x04, 0x062e, 0x0674);
+}
+
+/* 0x062e state 0A: bsr16 -> 0x1ad3 mask_acc; returns to 0x0631. */
+void step_cmd_ring_state0a_bsr_mask_acc(void)
+{
+    call(0x0631, 0x1ad3);
+}
+
+/* 0x0631 state 0A: rts. */
+void step_cmd_ring_state0a_rts(void)
+{
+    ret();
+}
+
+/* 0x0632 state 0C: MOVG #0xff -> @r3+0xa050. */
+void step_cmd_ring_state0c_mov_ff_to_r3_0xa050(void)
+{
+    mov_imm8_mem(ea_r(3, 0xa050), (int8_t)0xff);
+    mcu.pc = 0x0637;
+}
+
+/* 0x0637 state 0C: BSET @r3+0xa060 #0. */
+void step_cmd_ring_state0c_bset_r3_0xa060_bit0(void)
+{
+    bset(ea_r(3, 0xa060), 0);
+    mcu.pc = 0x063b;
+}
+
+/* 0x063b state 0C: rts. */
+void step_cmd_ring_state0c_rts(void)
+{
+    ret();
+}
+
+/* 0x063c state 0E: CLR @r3+0xa060. */
+void step_cmd_ring_state0e_clr_r3_0xa060(void)
+{
+    clr8_mem(ea_r(3, 0xa060));
+    mcu.pc = 0x0640;
+}
+
+/* 0x0640 state 0E: rts. */
+void step_cmd_ring_state0e_rts(void)
+{
+    ret();
+}
+
+/* 0x0653 state 12: bsr16 -> 0x14ad; returns to 0x0656. */
+void step_cmd_ring_state12_bsr_to_0x14ad(void)
+{
+    call(0x0656, 0x14ad);
+}
+
+/* 0x0656 state 12: rts. */
+void step_cmd_ring_state12_rts(void)
+{
+    ret();
+}
+
+/* 0x0660 state 16: CLR @r3+0xa060. */
+void step_cmd_ring_state16_clr_r3_0xa060(void)
+{
+    clr8_mem(ea_r(3, 0xa060));
+    mcu.pc = 0x0664;
+}
+
+/* 0x0664 state 16: MOVG #0xff -> @r3+0xa050. */
+void step_cmd_ring_state16_mov_ff_to_r3_0xa050(void)
+{
+    mov_imm8_mem(ea_r(3, 0xa050), (int8_t)0xff);
+    mcu.pc = 0x0669;
+}
+
+/* 0x0669 state 16: bsr16 -> 0x151e scan_b; returns to 0x066c. */
+void step_cmd_ring_state16_bsr_to_scan_b(void)
+{
+    call(0x066c, 0x151e);
+}
+
+/* 0x066c state 16: pjsr #0x04:0x0674 (pool kill/release F); returns 0x0670. */
+void step_cmd_ring_state16_pjsr_pool_kill(void)
+{
+    pjsr(0x04, 0x0670, 0x0674);
+}
+
+/* 0x0670 state 16: bsr16 -> 0x1ad3 mask_acc; returns to 0x0673. */
+void step_cmd_ring_state16_bsr_to_mask_acc(void)
+{
+    call(0x0673, 0x1ad3);
+}
+
+/* 0x0673 state 16: rts. */
+void step_cmd_ring_state16_rts(void)
+{
+    ret();
+}
 
 } /* anonymous namespace */
 
@@ -243,8 +235,24 @@ const uint16_t kCmdRingPcs[] = {
  * MK2CPP_HandFillTables aggregator (pcm_enable.cpp). */
 void cmd_ring_fill(void)
 {
-    for (uint32_t i = 0; i < sizeof(kCmdRingPcs) / sizeof(kCmdRingPcs[0]); i++)
-        MK2CPP_HandRegisterRoutine(kCmdRingPcs[i], &step_cmd_ring);
+    MK2CPP_HandRegister(0x00000625u, &step_cmd_ring_state08_pjsr_pool_scan);
+    MK2CPP_HandRegister(0x00000629u, &step_cmd_ring_state08_rts);
+    MK2CPP_HandRegister(0x0000062au, &step_cmd_ring_state0a_pjsr_pool_kill);
+    MK2CPP_HandRegister(0x0000062eu, &step_cmd_ring_state0a_bsr_mask_acc);
+    MK2CPP_HandRegister(0x00000631u, &step_cmd_ring_state0a_rts);
+    MK2CPP_HandRegister(0x00000632u, &step_cmd_ring_state0c_mov_ff_to_r3_0xa050);
+    MK2CPP_HandRegister(0x00000637u, &step_cmd_ring_state0c_bset_r3_0xa060_bit0);
+    MK2CPP_HandRegister(0x0000063bu, &step_cmd_ring_state0c_rts);
+    MK2CPP_HandRegister(0x0000063cu, &step_cmd_ring_state0e_clr_r3_0xa060);
+    MK2CPP_HandRegister(0x00000640u, &step_cmd_ring_state0e_rts);
+    MK2CPP_HandRegister(0x00000653u, &step_cmd_ring_state12_bsr_to_0x14ad);
+    MK2CPP_HandRegister(0x00000656u, &step_cmd_ring_state12_rts);
+    MK2CPP_HandRegister(0x00000660u, &step_cmd_ring_state16_clr_r3_0xa060);
+    MK2CPP_HandRegister(0x00000664u, &step_cmd_ring_state16_mov_ff_to_r3_0xa050);
+    MK2CPP_HandRegister(0x00000669u, &step_cmd_ring_state16_bsr_to_scan_b);
+    MK2CPP_HandRegister(0x0000066cu, &step_cmd_ring_state16_pjsr_pool_kill);
+    MK2CPP_HandRegister(0x00000670u, &step_cmd_ring_state16_bsr_to_mask_acc);
+    MK2CPP_HandRegister(0x00000673u, &step_cmd_ring_state16_rts);
 }
 
 namespace {

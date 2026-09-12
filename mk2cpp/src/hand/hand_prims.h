@@ -83,6 +83,35 @@ inline void tst16(uint16_t value)
     MCU_SetStatus(0, STATUS_C);
 }
 
+/* ---- bit ops on @rN (BTSTI / BCLR / BSET reg-indirect) -------------------- */
+
+/* BTSTI @rN #bit: only Z is written (Z = the bit is clear). */
+inline void btsti_reg_bit(uint32_t reg, unsigned bit)
+{
+    uint32_t data = (uint32_t)MCU_Read(reg_addr(reg));
+    MCU_SetStatus((data & (1u << bit)) == 0, STATUS_Z);
+}
+
+/* BCLR @rN #bit: Z = the cleared bit was clear; clear it in memory. */
+inline void bclr_reg_bit(uint32_t reg, unsigned bit)
+{
+    uint32_t addr = reg_addr(reg);
+    uint32_t data = (uint32_t)MCU_Read(addr);
+    MCU_SetStatus((data & (1u << bit)) == 0, STATUS_Z);
+    data &= ~(1u << bit);
+    MCU_Write(addr, (uint8_t)data);
+}
+
+/* BSET @rN #bit: Z = the set bit was clear; set it in memory. */
+inline void bset_reg_bit(uint32_t reg, unsigned bit)
+{
+    uint32_t addr = reg_addr(reg);
+    uint32_t data = (uint32_t)MCU_Read(addr);
+    MCU_SetStatus((data & (1u << bit)) == 0, STATUS_Z);
+    data |= 1u << bit;
+    MCU_Write(addr, (uint8_t)data);
+}
+
 /* ---- byte/word moves (MOVG2/MOVG3/MOVI) ----------------------------------- */
 
 /* MOVG2 @addr -> rN (byte): low byte replaced, flags from the byte. */

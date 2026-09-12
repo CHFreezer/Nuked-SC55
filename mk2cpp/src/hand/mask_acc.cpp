@@ -4,10 +4,12 @@
  * rom1 sha256 8a1eb33c7599b746c0c50283e4349a1bb1773b5c0ec0e9661219bf6c067d2042
  * rom2 sha256 a4c9fd821059054c7e7681d61f49ce6f42ed2fe407a7ec1ba0dfdc9722582ce0
  * hand_rev 2
+ * M4 closure step 2 (semantic rewrite): one named void step function per PC,
+ * registered flat=pc/cp0 via MK2CPP_HandRegister.
  *
  * Replaces the whole mask_acc block 0x1ad3..0x1af1 (IML gate, loop seed, loop
  * body, IML restore, rts) with one hand entry per instruction. Each entry
- * executes exactly one H8 instruction and returns 1,
+ * executes exactly one H8 instruction,
  * so the host keeps its per-instruction interrupt poll, TIMER_Clock, trace and
  * SM_Update cadence. The previous form was one L1 block returning 5*N (140):
  * a multi-instruction block defers the host tail, so -midiseq / real-time MIDI
@@ -79,90 +81,88 @@ uint32_t ind_addr(uint32_t reg, uint16_t disp)
     return ((uint32_t)page << 16) | (uint16_t)(mcu.r[reg] + disp);
 }
 
-/* One host step per instruction: dispatch on the PC the host is at. */
-uint32_t maskacc_step(void)
-{
-    uint16_t &r0 = mcu.r[0];
-    uint16_t &r1 = mcu.r[1];
+/* ======================================================================== */
+/* mask_acc 0x1ad3..0x1af1, 9 PCs (cp0, flat = pc)                          */
+/* ======================================================================== */
 
-    switch (mcu.pc)
-    {
-    case 0x1ad3: /* BSET_ORC #0x0700 r0: SR |= 0x0700 (IML=7) */
-    {
-        uint32_t val = MCU_ControlRegisterRead(0, 1);
-        val |= 0x0700u;
-        MCU_ControlRegisterWrite(0, 1, val);
-        mcu.ex_ignore = 1;
-        mcu.pc = 0x1ad7;
-        break;
-    }
-    case 0x1ad7: /* movi r1 #0x001b: loop seed */
-        mcu.r[1] = 0x001b;
-        MCU_SetStatusCommon(0x001b, 1);
-        mcu.pc = 0x1ada;
-        break;
-    case 0x1ada: /* MOVG2 @r1+0xa4b4 r0 */
-    {
-        uint8_t value = MCU_Read(ind_addr(1, 0xa4b4));
-        r0 = (uint16_t)((r0 & 0xff00u) | value);
-        MCU_SetStatusCommon(value, 0);
-        mcu.pc = 0x1ade;
-        break;
-    }
-    case 0x1ade: /* OR @r1+0xacf2 r0 (GT OR <EA>,Rd: flags from r0) */
-    {
-        uint32_t data = MCU_Read(ind_addr(1, 0xacf2));
-        r0 = (uint16_t)(r0 | data);
-        MCU_SetStatusCommon(r0, 0);
-        mcu.pc = 0x1ae2;
-        break;
-    }
-    case 0x1ae2: /* MOVG3 r0 -> @r1+0xacf2 */
-    {
-        uint8_t value = (uint8_t)r0;
-        MCU_Write(ind_addr(1, 0xacf2), value);
-        MCU_SetStatusCommon(value, 0);
-        mcu.pc = 0x1ae6;
-        break;
-    }
-    case 0x1ae6: /* CLR @r1+0xa4b4: N=0 Z=1 V=0 C=0 */
-        MCU_Write(ind_addr(1, 0xa4b4), 0);
-        MCU_SetStatus(0, STATUS_N);
-        MCU_SetStatus(1, STATUS_Z);
-        MCU_SetStatus(0, STATUS_V);
-        MCU_SetStatus(0, STATUS_C);
-        mcu.pc = 0x1aea;
-        break;
-    case 0x1aea: /* cntjmp r1 -19: r1--; branch while r1 != 0xffff */
-        r1 = (uint16_t)(r1 - 1);
-        mcu.pc = (r1 != 0xffff) ? 0x1adau : 0x1aedu;
-        break;
-    case 0x1aed: /* BCLR_ANDC #0xf8ff r0: SR &= 0xf8ff (IML=0) */
-    {
-        uint32_t val = MCU_ControlRegisterRead(0, 1);
-        val &= 0xf8ffu;
-        MCU_ControlRegisterWrite(0, 1, val);
-        mcu.ex_ignore = 1;
-        mcu.pc = 0x1af1;
-        break;
-    }
-    case 0x1af1: /* rts */
-        mcu.pc = MCU_PopStack();
-        break;
-    default: /* not in this block: execute the stock instruction once */
-    {
-        uint8_t op = MCU_ReadCodeAdvance();
-        MCU_Operand_Table[op](op);
-        break;
-    }
-    }
-    return 1;
+/* 0x1ad3 BSET_ORC #0x0700 r0: SR |= 0x0700 (IML=7); ex_ignore=1. */
+void step_mask_acc_set_iml7(void)
+{
+    uint32_t val = MCU_ControlRegisterRead(0, 1);
+    val |= 0x0700u;
+    MCU_ControlRegisterWrite(0, 1, val);
+    mcu.ex_ignore = 1;
+    mcu.pc = 0x1ad7;
 }
 
-/* One entry per instruction of the block (the entry PC of each). */
-const uint16_t kMaskAccPcs[] = {
-    0x1ad3, 0x1ad7, 0x1ada, 0x1ade, 0x1ae2, 0x1ae6, 0x1aea, 0x1aed, 0x1af1,
-};
+/* 0x1ad7 movi r1 #0x001b: loop seed (27 down to 0). */
+void step_mask_acc_seed_loop(void)
+{
+    mcu.r[1] = 0x001b;
+    MCU_SetStatusCommon(0x001b, 1);
+    mcu.pc = 0x1ada;
+}
+
+/* 0x1ada MOVG2 @r1+0xa4b4 r0: r0.lo = new[r1], high byte kept. */
+void step_mask_acc_load_new(void)
+{
+    uint8_t value = MCU_Read(ind_addr(1, 0xa4b4));
+    mcu.r[0] = (uint16_t)((mcu.r[0] & 0xff00u) | value);
+    MCU_SetStatusCommon(value, 0);
+    mcu.pc = 0x1ade;
+}
+
+/* 0x1ade OR @r1+0xacf2 r0 (GT OR <EA>,Rd: flags from r0). */
+void step_mask_acc_or_accum(void)
+{
+    uint32_t data = MCU_Read(ind_addr(1, 0xacf2));
+    mcu.r[0] = (uint16_t)(mcu.r[0] | data);
+    MCU_SetStatusCommon(mcu.r[0], 0);
+    mcu.pc = 0x1ae2;
+}
+
+/* 0x1ae2 MOVG3 r0 -> @r1+0xacf2: acc[r1] = r0.lo. */
+void step_mask_acc_store_accum(void)
+{
+    uint8_t value = (uint8_t)mcu.r[0];
+    MCU_Write(ind_addr(1, 0xacf2), value);
+    MCU_SetStatusCommon(value, 0);
+    mcu.pc = 0x1ae6;
+}
+
+/* 0x1ae6 CLR @r1+0xa4b4: new[r1] = 0; N=0 Z=1 V=0 C=0. */
+void step_mask_acc_clear_new(void)
+{
+    MCU_Write(ind_addr(1, 0xa4b4), 0);
+    MCU_SetStatus(0, STATUS_N);
+    MCU_SetStatus(1, STATUS_Z);
+    MCU_SetStatus(0, STATUS_V);
+    MCU_SetStatus(0, STATUS_C);
+    mcu.pc = 0x1aea;
+}
+
+/* 0x1aea cntjmp r1 -19: r1--; branch back while r1 != 0xffff. */
+void step_mask_acc_count_loop(void)
+{
+    mcu.r[1] = (uint16_t)(mcu.r[1] - 1);
+    mcu.pc = (mcu.r[1] != 0xffff) ? 0x1adau : 0x1aedu;
+}
+
+/* 0x1aed BCLR_ANDC #0xf8ff r0: SR &= 0xf8ff (IML=0); ex_ignore=1. */
+void step_mask_acc_restore_iml(void)
+{
+    uint32_t val = MCU_ControlRegisterRead(0, 1);
+    val &= 0xf8ffu;
+    MCU_ControlRegisterWrite(0, 1, val);
+    mcu.ex_ignore = 1;
+    mcu.pc = 0x1af1;
+}
+
+/* 0x1af1 rts. */
+void step_mask_acc_rts(void)
+{
+    mcu.pc = MCU_PopStack();
+}
 
 } /* anonymous namespace */
 } /* namespace mk2c */
@@ -170,7 +170,14 @@ const uint16_t kMaskAccPcs[] = {
 void MK2CPP_MaskAccFillTables(void)
 {
 #if MK2CPP_HAND_MASKACC
-    for (uint32_t i = 0; i < sizeof(mk2c::kMaskAccPcs) / sizeof(mk2c::kMaskAccPcs[0]); i++)
-        MK2CPP_HandRegisterRoutine(mk2c::kMaskAccPcs[i], &mk2c::maskacc_step);
+    MK2CPP_HandRegister(0x00001ad3u, &mk2c::step_mask_acc_set_iml7);
+    MK2CPP_HandRegister(0x00001ad7u, &mk2c::step_mask_acc_seed_loop);
+    MK2CPP_HandRegister(0x00001adau, &mk2c::step_mask_acc_load_new);
+    MK2CPP_HandRegister(0x00001adeu, &mk2c::step_mask_acc_or_accum);
+    MK2CPP_HandRegister(0x00001ae2u, &mk2c::step_mask_acc_store_accum);
+    MK2CPP_HandRegister(0x00001ae6u, &mk2c::step_mask_acc_clear_new);
+    MK2CPP_HandRegister(0x00001aeau, &mk2c::step_mask_acc_count_loop);
+    MK2CPP_HandRegister(0x00001aedu, &mk2c::step_mask_acc_restore_iml);
+    MK2CPP_HandRegister(0x00001af1u, &mk2c::step_mask_acc_rts);
 #endif
 }

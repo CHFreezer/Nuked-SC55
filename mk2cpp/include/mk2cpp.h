@@ -46,6 +46,15 @@ void MK2CPP_HandRegister(uint32_t flat, mk2cpp_fn fn);
  * (cp 0 or 4 only); shares the L0 sparse table and lookup. Duplicate flat is a
  * fatal error. The returned instruction count must be >= 1. */
 void MK2CPP_HandRegisterRoutine(uint32_t flat, mk2cpp_hand_routine_fn fn);
+/* L1 instruction-boundary callback (docs/09 4.3, docs/11 4.3): called from
+ * inside an L1 routine hook at an internal instruction boundary, it runs GT's
+ * per-step interrupt/exception poll exactly as the host loop does before each
+ * instruction (src/mcu.cpp:1839-1842): consume ex_ignore if set, otherwise
+ * MCU_Interrupt_Handle(). Returns 1 when a trap/exception was started (pc/cp
+ * now point at the vector, so the routine must stop without touching pc/cp and
+ * let the host continue), 0 otherwise. It does not advance cycles and does not
+ * touch devices; call it only from routine hooks, at a recoverable ROM PC. */
+int MK2CPP_HandBoundary(void);
 /* Provided by hand modules; MK2CPP_Init calls it after the generated tables
  * are filled (guarded by MK2CPP_HAS_HAND) to publish all committed overrides. */
 void MK2CPP_HandFillTables(void);

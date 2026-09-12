@@ -6,8 +6,8 @@
  * move, so behavior is bit-identical. Current form: one L0 hand entry per
  * instruction PC (each entry executes exactly one H8 instruction and returns
  * 1) so the host keeps its per-instruction interrupt poll, cycles += 12, trace
- * and MIDI/SM cadence (docs/09_m4_integration.md 4.1). The semantic rewrite is
- * M4 closure step 2 and changes neither addresses nor registration.
+ * and MIDI/SM cadence (docs/09_m4_integration.md 4.1). Semantically rewritten
+ * in M4 closure step 2 (2026-09-13); addresses and registration unchanged.
  *
  * Semantics: Writes dp:0xd1de to dp:0xd202 and dp:0xd204, then rts. Nine rom2 callers (0x432D5 A5, 0x3F8E, 0x3FAC, 0x3FC0, 0x495F, 0x67A2, 0x67D4, 0xB610, 0xB98D); leaf and caller-independent.
  * Evidence: out/m4/28_shared_status.md 1.2. Confidence: C bytes (role naming I where noted).
@@ -30,31 +30,25 @@ using namespace mk2c::hand_prim;
  * 0xB610/0xB98D (rom2 offsets); leaf, no context dependency.
  * ====================================================================== */
 
-uint32_t step_maint_fill_d1de(void)
+/* 0x433C4 mov.w #0xd1de -> (dp,0xd202) [1d d2 02 07 d1 de]. */
+void step_fill_d202(void)
 {
-    switch (mcu.pc)
-    {
-    case 0x33c4: /* MOVG #0xd1de -> (dp,0xd202) (word) [1d d2 02 07 d1 de] */
-        mcu.pc = 0x33ca;
-        store16(dp_addr(0xd202), 0xd1de);
-        return 1;
-    case 0x33ca: /* MOVG #0xd1de -> (dp,0xd204) (word) [1d d2 04 07 d1 de] */
-        mcu.pc = 0x33d0;
-        store16(dp_addr(0xd204), 0xd1de);
-        return 1;
-    case 0x33d0: /* rts [19] */
-        mcu.pc = MCU_PopStack();
-        return 1;
-    default:
-        stock_instruction();
-        return 1;
-    }
+    mcu.pc = 0x33ca;
+    store16(dp_addr(0xd202), 0xd1de);
 }
 
-/* cp4 0x433C4..0x433D0 (3 PC) -> step_maint_fill_d1de */
-const uint16_t kMaintFillD1dePcs[] = {
-    0x33c4, 0x33ca, 0x33d0,
-};
+/* 0x433CA mov.w #0xd1de -> (dp,0xd204) [1d d2 04 07 d1 de]. */
+void step_fill_d204(void)
+{
+    mcu.pc = 0x33d0;
+    store16(dp_addr(0xd204), 0xd1de);
+}
+
+/* 0x433D0 rts [19]. */
+void step_return(void)
+{
+    mcu.pc = MCU_PopStack();
+}
 
 } /* anonymous namespace */
 
@@ -62,8 +56,9 @@ const uint16_t kMaintFillD1dePcs[] = {
  * MK2CPP_HandFillTables aggregator (pcm_enable.cpp). */
 void maint_fill_d1de_fill(void)
 {
-    for (uint32_t i = 0; i < sizeof(kMaintFillD1dePcs) / sizeof(kMaintFillD1dePcs[0]); i++)
-        MK2CPP_HandRegisterRoutine(0x00040000u | kMaintFillD1dePcs[i], &step_maint_fill_d1de);
+    MK2CPP_HandRegister(0x000433c4u, &step_fill_d202);
+    MK2CPP_HandRegister(0x000433cau, &step_fill_d204);
+    MK2CPP_HandRegister(0x000433d0u, &step_return);
 }
 
 namespace {

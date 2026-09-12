@@ -4,6 +4,7 @@
  * rom1 sha256 8a1eb33c7599b746c0c50283e4349a1bb1773b5c0ec0e9661219bf6c067d2042
  * rom2 sha256 a4c9fd821059054c7e7681d61f49ce6f42ed2fe407a7ec1ba0dfdc9722582ce0
  * hand_rev 1
+ * M4 closure step 2 (semantic rewrite): one named void step function per PC, registered via MK2CPP_HandRegister.
  *
  * Routine boundary (derived from the ROM bytes + tools/baselines/dasm_full.txt,
  * not assumed from the fragment table): the family is the single routine
@@ -428,1233 +429,2381 @@ uint16_t bge(uint16_t taken, uint16_t fall)
     return (nv == 0) ? taken : fall;
 }
 
-/* Safety net: a PC missing from the table is executed by the stock interpreter
- * for that one instruction (should never happen). */
-void stock_instruction(void)
+/* ======================================================================== */
+/* the 0x4DE7 family, 0x4DE7..0x50EE, 302 PCs: one named step per instruction */
+/* ======================================================================== */
+
+/* 0x4de7 MOVG2 (dp,0xad2a) r2. */
+void step_dsp_rate_movg2_dp_0xad2a_r2(void)
 {
-    uint8_t op = MCU_ReadCodeAdvance();
-    MCU_Operand_Table[op](op);
+    load16(mcu.r[2], dp_addr(0xad2a));
+    mcu.pc = 0x4deb;
 }
 
-/* ---- the 0x4DE7 family: one case per instruction PC ----------------------- */
-
-uint32_t step_dsp_rate(void)
+/* 0x4deb ADD @r0+22 r2. */
+void step_dsp_rate_add_r0_22_r2(void)
 {
-    switch (mcu.pc)
-    {
-    case 0x4de7: /* MOVG2 (dp,0xad2a) r2 [1d ad 2a 82] */
-        load16(mcu.r[2], dp_addr(0xad2a));
-        mcu.pc = 0x4deb;
-        return 1;
-    case 0x4deb: /* ADD @r0+22 r2 [e8 16 22] */
-        add16_mem(mcu.r[2], ind_addr(0, 22));
-        mcu.pc = 0x4dee;
-        return 1;
-    case 0x4dee: /* CLR @r0+22 [e8 16 13] */
-        clr16_mem(ind_addr(0, 22));
-        mcu.pc = 0x4df1;
-        return 1;
-    case 0x4df1: /* MULXU @r0+124 r2:r3 [e8 7c aa] */
-        mulxu16_mem(mcu.r[2], mcu.r[3], ind_addr(0, 124));
-        mcu.pc = 0x4df4;
-        return 1;
-    case 0x4df4: /* ADD @r0+12 r3 [e8 0c 23] */
-        add16_mem(mcu.r[3], ind_addr(0, 12));
-        mcu.pc = 0x4df7;
-        return 1;
-    case 0x4df7: /* ADDX #0x0000 r2 [0c 00 00 a2] */
-        addx16_imm(mcu.r[2], 0x0000);
-        mcu.pc = 0x4dfb;
-        return 1;
-    case 0x4dfb: /* TST r2 [aa 16] */
-        tst16_reg(mcu.r[2]);
-        mcu.pc = 0x4dfd;
-        return 1;
-    case 0x4dfd: /* BEQ 17 -> 0x4e10 [27 11] */
-        mcu.pc = beq(0x4e10, 0x4dff);
-        return 1;
-    case 0x4dff: /* SUB #0xffff r3 [0c ff ff 33] */
-        sub16_imm(mcu.r[3], 0xffff);
-        mcu.pc = 0x4e03;
-        return 1;
-    case 0x4e03: /* SUBX #0x0000 r2 [0c 00 00 b2] */
-        subx16_imm(mcu.r[2], 0x0000);
-        mcu.pc = 0x4e07;
-        return 1;
-    case 0x4e07: /* DIVXU @r0+124 r2:r3 [e8 7c ba] */
-        divxu16_mem(mcu.r[2], mcu.r[3], ind_addr(0, 124));
-        mcu.pc = 0x4e0a;
-        return 1;
-    case 0x4e0a: /* MOVG3 r3 -> @r0+22 [e8 16 93] */
-        store16(ind_addr(0, 22), mcu.r[3]);
-        mcu.pc = 0x4e0d;
-        return 1;
-    case 0x4e0d: /* movi r3 #0xffff [5b ff ff] */
-        movi16(mcu.r[3], 0xffff);
-        mcu.pc = 0x4e10;
-        return 1;
-    case 0x4e10: /* MOVG3 r3 -> @r0+12 [e8 0c 93] */
-        store16(ind_addr(0, 12), mcu.r[3]);
-        mcu.pc = 0x4e13;
-        return 1;
-    case 0x4e13: /* SUB @r0+-3 #0x00 [e0 fd 04 00] */
-        sub8_mem_imm_flags(ind_addr(0, -3), 0x00);
-        mcu.pc = 0x4e17;
-        return 1;
-    case 0x4e17: /* BNE 30 -> 0x4e37 [26 1e] */
-        mcu.pc = bne(0x4e37, 0x4e19);
-        return 1;
-    case 0x4e19: /* MOVG2 @r0+114 r4 [e8 72 84] */
-        load16(mcu.r[4], ind_addr(0, 114));
-        mcu.pc = 0x4e1c;
-        return 1;
-    case 0x4e1c: /* SUB @r0+112 r4 [e8 70 34] */
-        sub16_mem(mcu.r[4], ind_addr(0, 112));
-        mcu.pc = 0x4e1f;
-        return 1;
-    case 0x4e1f: /* MULXU r3 r4:r5 [ab ac] */
-        mulxu16_reg(mcu.r[4], mcu.r[5], mcu.r[3]);
-        mcu.pc = 0x4e21;
-        return 1;
-    case 0x4e21: /* CLR r3 [ab 13] */
-        clr16_reg(mcu.r[3]);
-        mcu.pc = 0x4e23;
-        return 1;
-    case 0x4e23: /* ADD @r0+112 r4 [e8 70 24] */
-        add16_mem(mcu.r[4], ind_addr(0, 112));
-        mcu.pc = 0x4e26;
-        return 1;
-    case 0x4e26: /* ADDX @r0+106 r3 [e0 6a a3] */
-        addx8_mem(mcu.r[3], ind_addr(0, 106));
-        mcu.pc = 0x4e29;
-        return 1;
-    case 0x4e29: /* MOVG3 r3 -> @r0+44 [e0 2c 93] */
-        store8(ind_addr(0, 44), mcu.r[3]);
-        mcu.pc = 0x4e2c;
-        return 1;
-    case 0x4e2c: /* MOVG3 r4 -> @r0+68 [e8 44 94] */
-        store16(ind_addr(0, 68), mcu.r[4]);
-        mcu.pc = 0x4e2f;
-        return 1;
-    case 0x4e2f: /* MOVG3 r3 -> @r0+45 [e0 2d 93] */
-        store8(ind_addr(0, 45), mcu.r[3]);
-        mcu.pc = 0x4e32;
-        return 1;
-    case 0x4e32: /* MOVG3 r4 -> @r0+70 [e8 46 94] */
-        store16(ind_addr(0, 70), mcu.r[4]);
-        mcu.pc = 0x4e35;
-        return 1;
-    case 0x4e35: /* BRA 31 -> 0x4e56 [20 1f] */
-        mcu.pc = 0x4e56;
-        return 1;
-    case 0x4e37: /* MOVG2 @r0+112 r4 [e8 70 84] */
-        load16(mcu.r[4], ind_addr(0, 112));
-        mcu.pc = 0x4e3a;
-        return 1;
-    case 0x4e3a: /* SUB @r0+114 r4 [e8 72 34] */
-        sub16_mem(mcu.r[4], ind_addr(0, 114));
-        mcu.pc = 0x4e3d;
-        return 1;
-    case 0x4e3d: /* MULXU r3 r4:r5 [ab ac] */
-        mulxu16_reg(mcu.r[4], mcu.r[5], mcu.r[3]);
-        mcu.pc = 0x4e3f;
-        return 1;
-    case 0x4e3f: /* MOVG2 @r0+112 r6 [e8 70 86] */
-        load16(mcu.r[6], ind_addr(0, 112));
-        mcu.pc = 0x4e42;
-        return 1;
-    case 0x4e42: /* MOVG2 @r0+106 r5 [e0 6a 85] */
-        load8(mcu.r[5], ind_addr(0, 106));
-        mcu.pc = 0x4e45;
-        return 1;
-    case 0x4e45: /* SUB r4 r6 [ac 36] */
-        sub16_reg(mcu.r[6], mcu.r[4]);
-        mcu.pc = 0x4e47;
-        return 1;
-    case 0x4e47: /* SUBX #0x00 r5 [04 00 b5] */
-        subx8_imm(mcu.r[5], 0x00);
-        mcu.pc = 0x4e4a;
-        return 1;
-    case 0x4e4a: /* MOVG3 r5 -> @r0+44 [e0 2c 95] */
-        store8(ind_addr(0, 44), mcu.r[5]);
-        mcu.pc = 0x4e4d;
-        return 1;
-    case 0x4e4d: /* MOVG3 r6 -> @r0+68 [e8 44 96] */
-        store16(ind_addr(0, 68), mcu.r[6]);
-        mcu.pc = 0x4e50;
-        return 1;
-    case 0x4e50: /* MOVG3 r5 -> @r0+45 [e0 2d 95] */
-        store8(ind_addr(0, 45), mcu.r[5]);
-        mcu.pc = 0x4e53;
-        return 1;
-    case 0x4e53: /* MOVG3 r6 -> @r0+70 [e8 46 96] */
-        store16(ind_addr(0, 70), mcu.r[6]);
-        mcu.pc = 0x4e56;
-        return 1;
-    case 0x4e56: /* MOVG2 @r0+45 r5 [e0 2d 85] */
-        load8(mcu.r[5], ind_addr(0, 45));
-        mcu.pc = 0x4e59;
-        return 1;
-    case 0x4e59: /* MOVG2 @r0+70 r6 [e8 46 86] */
-        load16(mcu.r[6], ind_addr(0, 70));
-        mcu.pc = 0x4e5c;
-        return 1;
-    case 0x4e5c: /* MOVG2 @r0+0x0086 r2 [f8 00 86 82] */
-        load16(mcu.r[2], ind_addr(0, 134));
-        mcu.pc = 0x4e60;
-        return 1;
-    case 0x4e60: /* BPL 15 -> 0x4e71 [2a 0f] */
-        mcu.pc = bpl(0x4e71, 0x4e62);
-        return 1;
-    case 0x4e62: /* NEG r2 [aa 14] */
-        neg16(mcu.r[2]);
-        mcu.pc = 0x4e64;
-        return 1;
-    case 0x4e64: /* SUB r2 r6 [aa 36] */
-        sub16_reg(mcu.r[6], mcu.r[2]);
-        mcu.pc = 0x4e66;
-        return 1;
-    case 0x4e66: /* SUBX #0x00 r5 [04 00 b5] */
-        subx8_imm(mcu.r[5], 0x00);
-        mcu.pc = 0x4e69;
-        return 1;
-    case 0x4e69: /* BCC 32 -> 0x4e8b [24 20] */
-        mcu.pc = bcc(0x4e8b, 0x4e6b);
-        return 1;
-    case 0x4e6b: /* CLR r6 [ae 13] */
-        clr16_reg(mcu.r[6]);
-        mcu.pc = 0x4e6d;
-        return 1;
-    case 0x4e6d: /* CLR r5 [a5 13] */
-        clr8_reg(mcu.r[5]);
-        mcu.pc = 0x4e6f;
-        return 1;
-    case 0x4e6f: /* BRA 26 -> 0x4e8b [20 1a] */
-        mcu.pc = 0x4e8b;
-        return 1;
-    case 0x4e71: /* ADD r2 r6 [aa 26] */
-        add16_reg(mcu.r[6], mcu.r[2]);
-        mcu.pc = 0x4e73;
-        return 1;
-    case 0x4e73: /* ADDX #0x00 r5 [04 00 a5] */
-        addx8_imm(mcu.r[5], 0x00);
-        mcu.pc = 0x4e76;
-        return 1;
-    case 0x4e76: /* cmp r5,b #0x01 [45 01] */
-        cmp8_imm(mcu.r[5], 0x01);
-        mcu.pc = 0x4e78;
-        return 1;
-    case 0x4e78: /* BEQ 9 -> 0x4e83 [27 09] */
-        mcu.pc = beq(0x4e83, 0x4e7a);
-        return 1;
-    case 0x4e7a: /* BCS 15 -> 0x4e8b [25 0f] */
-        mcu.pc = bcs(0x4e8b, 0x4e7c);
-        return 1;
-    case 0x4e7c: /* movi r6 #0xf018 [5e f0 18] */
-        movi16(mcu.r[6], 0xf018);
-        mcu.pc = 0x4e7f;
-        return 1;
-    case 0x4e7f: /* move r5 #0x01 [55 01] */
-        move8(mcu.r[5], 0x01);
-        mcu.pc = 0x4e81;
-        return 1;
-    case 0x4e81: /* BRA 8 -> 0x4e8b [20 08] */
-        mcu.pc = 0x4e8b;
-        return 1;
-    case 0x4e83: /* cmp r6,w #0xf018 [4e f0 18] */
-        cmp16_imm(mcu.r[6], 0xf018);
-        mcu.pc = 0x4e86;
-        return 1;
-    case 0x4e86: /* BLS 3 -> 0x4e8b [23 03] */
-        mcu.pc = bls(0x4e8b, 0x4e88);
-        return 1;
-    case 0x4e88: /* movi r6 #0xf018 [5e f0 18] */
-        movi16(mcu.r[6], 0xf018);
-        mcu.pc = 0x4e8b;
-        return 1;
-    case 0x4e8b: /* MOVG3 r5 -> @r0+45 [e0 2d 95] */
-        store8(ind_addr(0, 45), mcu.r[5]);
-        mcu.pc = 0x4e8e;
-        return 1;
-    case 0x4e8e: /* MOVG3 r6 -> @r0+70 [e8 46 96] */
-        store16(ind_addr(0, 70), mcu.r[6]);
-        mcu.pc = 0x4e91;
-        return 1;
-    case 0x4e91: /* MOVG2 @r0+-118 r2 [e8 8a 82] */
-        load16(mcu.r[2], ind_addr(0, -118));
-        mcu.pc = 0x4e94;
-        return 1;
-    case 0x4e94: /* MOVG2 @r0+0x0090 r3 [f8 00 90 83] */
-        load16(mcu.r[3], ind_addr(0, 144));
-        mcu.pc = 0x4e98;
-        return 1;
-    case 0x4e98: /* MOVG2 @r0+-96 r6 [e8 a0 86] */
-        load16(mcu.r[6], ind_addr(0, -96));
-        mcu.pc = 0x4e9b;
-        return 1;
-    case 0x4e9b: /* bsr16 -> 0x50ef [1e 02 51] */
-        MCU_PushStack(0x4e9e);
-        mcu.pc = 0x50ef;
-        return 1;
-    case 0x4e9e: /* MOVG2 @r0+-84 r2 [e8 ac 82] */
-        load16(mcu.r[2], ind_addr(0, -84));
-        mcu.pc = 0x4ea1;
-        return 1;
-    case 0x4ea1: /* MOVG2 @r0+0x0092 r3 [f8 00 92 83] */
-        load16(mcu.r[3], ind_addr(0, 146));
-        mcu.pc = 0x4ea5;
-        return 1;
-    case 0x4ea5: /* MOVG2 @r0+-62 r6 [e8 c2 86] */
-        load16(mcu.r[6], ind_addr(0, -62));
-        mcu.pc = 0x4ea8;
-        return 1;
-    case 0x4ea8: /* bsr16 -> 0x50ef [1e 02 44] */
-        MCU_PushStack(0x4eab);
-        mcu.pc = 0x50ef;
-        return 1;
-    case 0x4eab: /* MOVG2 @r0+45 r5 [e0 2d 85] */
-        load8(mcu.r[5], ind_addr(0, 45));
-        mcu.pc = 0x4eae;
-        return 1;
-    case 0x4eae: /* MOVG2 @r0+70 r6 [e8 46 86] */
-        load16(mcu.r[6], ind_addr(0, 70));
-        mcu.pc = 0x4eb1;
-        return 1;
-    case 0x4eb1: /* MOVG2 (dp,0x8000) r3 [1d 80 00 83] */
-        load16(mcu.r[3], dp_addr(0x8000));
-        mcu.pc = 0x4eb5;
-        return 1;
-    case 0x4eb5: /* SUB #0x0400 r3 [0c 04 00 33] */
-        sub16_imm(mcu.r[3], 0x0400);
-        mcu.pc = 0x4eb9;
-        return 1;
-    case 0x4eb9: /* BMI 7 -> 0x4ec2 [2b 07] */
-        mcu.pc = bmi(0x4ec2, 0x4ebb);
-        return 1;
-    case 0x4ebb: /* ADD r3 r6 [ab 26] */
-        add16_reg(mcu.r[6], mcu.r[3]);
-        mcu.pc = 0x4ebd;
-        return 1;
-    case 0x4ebd: /* ADDX #0x00 r5 [04 00 a5] */
-        addx8_imm(mcu.r[5], 0x00);
-        mcu.pc = 0x4ec0;
-        return 1;
-    case 0x4ec0: /* BRA 15 -> 0x4ed1 [20 0f] */
-        mcu.pc = 0x4ed1;
-        return 1;
-    case 0x4ec2: /* NEG r3 [ab 14] */
-        neg16(mcu.r[3]);
-        mcu.pc = 0x4ec4;
-        return 1;
-    case 0x4ec4: /* SUB r3 r6 [ab 36] */
-        sub16_reg(mcu.r[6], mcu.r[3]);
-        mcu.pc = 0x4ec6;
-        return 1;
-    case 0x4ec6: /* SUBX #0x00 r5 [04 00 b5] */
-        subx8_imm(mcu.r[5], 0x00);
-        mcu.pc = 0x4ec9;
-        return 1;
-    case 0x4ec9: /* TST r5 [a5 16] */
-        tst8_reg(mcu.r[5]);
-        mcu.pc = 0x4ecb;
-        return 1;
-    case 0x4ecb: /* BPL 4 -> 0x4ed1 [2a 04] */
-        mcu.pc = bpl(0x4ed1, 0x4ecd);
-        return 1;
-    case 0x4ecd: /* CLR r6 [ae 13] */
-        clr16_reg(mcu.r[6]);
-        mcu.pc = 0x4ecf;
-        return 1;
-    case 0x4ecf: /* CLR r5 [a5 13] */
-        clr8_reg(mcu.r[5]);
-        mcu.pc = 0x4ed1;
-        return 1;
-    case 0x4ed1: /* MOVG2 @r0+-2 r3 [e8 fe 83] */
-        load16(mcu.r[3], ind_addr(0, -2));
-        mcu.pc = 0x4ed4;
-        return 1;
-    case 0x4ed4: /* MOVG2 @r3+0xce78 r3 [f3 ce 78 83] */
-        load8(mcu.r[3], ind_addr(3, 52856));
-        mcu.pc = 0x4ed8;
-        return 1;
-    case 0x4ed8: /* ADD r3 r3 [ab 23] */
-        add16_reg(mcu.r[3], mcu.r[3]);
-        mcu.pc = 0x4eda;
-        return 1;
-    case 0x4eda: /* MOVG2 @r3+0xac4e r3 [fb ac 4e 83] */
-        load16(mcu.r[3], ind_addr(3, 44110));
-        mcu.pc = 0x4ede;
-        return 1;
-    case 0x4ede: /* BMI 7 -> 0x4ee7 [2b 07] */
-        mcu.pc = bmi(0x4ee7, 0x4ee0);
-        return 1;
-    case 0x4ee0: /* ADD r3 r6 [ab 26] */
-        add16_reg(mcu.r[6], mcu.r[3]);
-        mcu.pc = 0x4ee2;
-        return 1;
-    case 0x4ee2: /* ADDX #0x00 r5 [04 00 a5] */
-        addx8_imm(mcu.r[5], 0x00);
-        mcu.pc = 0x4ee5;
-        return 1;
-    case 0x4ee5: /* BRA 15 -> 0x4ef6 [20 0f] */
-        mcu.pc = 0x4ef6;
-        return 1;
-    case 0x4ee7: /* NEG r3 [ab 14] */
-        neg16(mcu.r[3]);
-        mcu.pc = 0x4ee9;
-        return 1;
-    case 0x4ee9: /* SUB r3 r6 [ab 36] */
-        sub16_reg(mcu.r[6], mcu.r[3]);
-        mcu.pc = 0x4eeb;
-        return 1;
-    case 0x4eeb: /* SUBX #0x00 r5 [04 00 b5] */
-        subx8_imm(mcu.r[5], 0x00);
-        mcu.pc = 0x4eee;
-        return 1;
-    case 0x4eee: /* TST r5 [a5 16] */
-        tst8_reg(mcu.r[5]);
-        mcu.pc = 0x4ef0;
-        return 1;
-    case 0x4ef0: /* BPL 4 -> 0x4ef6 [2a 04] */
-        mcu.pc = bpl(0x4ef6, 0x4ef2);
-        return 1;
-    case 0x4ef2: /* CLR r6 [ae 13] */
-        clr16_reg(mcu.r[6]);
-        mcu.pc = 0x4ef4;
-        return 1;
-    case 0x4ef4: /* CLR r5 [a5 13] */
-        clr8_reg(mcu.r[5]);
-        mcu.pc = 0x4ef6;
-        return 1;
-    case 0x4ef6: /* MOVG3 r5 -> @r0+45 [e0 2d 95] */
-        store8(ind_addr(0, 45), mcu.r[5]);
-        mcu.pc = 0x4ef9;
-        return 1;
-    case 0x4ef9: /* MOVG3 r6 -> @r0+70 [e8 46 96] */
-        store16(ind_addr(0, 70), mcu.r[6]);
-        mcu.pc = 0x4efc;
-        return 1;
-    case 0x4efc: /* MOVG2 @r0+66 r5 [e8 42 85] */
-        load16(mcu.r[5], ind_addr(0, 66));
-        mcu.pc = 0x4eff;
-        return 1;
-    case 0x4eff: /* MOVG2 @r0+43 r4 [e0 2b 84] */
-        load8(mcu.r[4], ind_addr(0, 43));
-        mcu.pc = 0x4f02;
-        return 1;
-    case 0x4f02: /* BNE 14 -> 0x4f12 [26 0e] */
-        mcu.pc = bne(0x4f12, 0x4f04);
-        return 1;
-    case 0x4f04: /* TST r5 [ad 16] */
-        tst16_reg(mcu.r[5]);
-        mcu.pc = 0x4f06;
-        return 1;
-    case 0x4f06: /* BNE 10 -> 0x4f12 [26 0a] */
-        mcu.pc = bne(0x4f12, 0x4f08);
-        return 1;
-    case 0x4f08: /* CLR r2 [aa 13] */
-        clr16_reg(mcu.r[2]);
-        mcu.pc = 0x4f0a;
-        return 1;
-    case 0x4f0a: /* MOVG2 @r0+45 r2 [e0 2d 82] */
-        load8(mcu.r[2], ind_addr(0, 45));
-        mcu.pc = 0x4f0d;
-        return 1;
-    case 0x4f0d: /* MOVG2 @r0+70 r3 [e8 46 83] */
-        load16(mcu.r[3], ind_addr(0, 70));
-        mcu.pc = 0x4f10;
-        return 1;
-    case 0x4f10: /* BRA 92 -> 0x4f6e [20 5c] */
-        mcu.pc = 0x4f6e;
-        return 1;
-    case 0x4f12: /* MOVG2 @r0+-2 r1 [e8 fe 81] */
-        load16(mcu.r[1], ind_addr(0, -2));
-        mcu.pc = 0x4f15;
-        return 1;
-    case 0x4f15: /* CLR r3 [ab 13] */
-        clr16_reg(mcu.r[3]);
-        mcu.pc = 0x4f17;
-        return 1;
-    case 0x4f17: /* MOVG2 @r0+-58 r2 [e8 c6 82] */
-        load16(mcu.r[2], ind_addr(0, -58));
-        mcu.pc = 0x4f1a;
-        return 1;
-    case 0x4f1a: /* MOVG2 @r2 r3 [d2 83] */
-        load8(mcu.r[3], ind_addr(2, 0));
-        mcu.pc = 0x4f1c;
-        return 1;
-    case 0x4f1c: /* ADD r3 r3 [ab 23] */
-        add16_reg(mcu.r[3], mcu.r[3]);
-        mcu.pc = 0x4f1e;
-        return 1;
-    case 0x4f1e: /* MOVG2 @r3+0x77a6 r6 [fb 77 a6 86] */
-        load16(mcu.r[6], ind_addr(3, 30630));
-        mcu.pc = 0x4f22;
-        return 1;
-    case 0x4f22: /* MOVG2 (dp,0xad2a) r2 [1d ad 2a 82] */
-        load16(mcu.r[2], dp_addr(0xad2a));
-        mcu.pc = 0x4f26;
-        return 1;
-    case 0x4f26: /* MULXU r6 r2:r3 [ae aa] */
-        mulxu16_reg(mcu.r[2], mcu.r[3], mcu.r[6]);
-        mcu.pc = 0x4f28;
-        return 1;
-    case 0x4f28: /* TST r4 [a4 16] */
-        tst8_reg(mcu.r[4]);
-        mcu.pc = 0x4f2a;
-        return 1;
-    case 0x4f2a: /* BPL 30 -> 0x4f4a [2a 1e] */
-        mcu.pc = bpl(0x4f4a, 0x4f2c);
-        return 1;
-    case 0x4f2c: /* NEG r4 [a4 14] */
-        neg8(mcu.r[4]);
-        mcu.pc = 0x4f2e;
-        return 1;
-    case 0x4f2e: /* NEG r5 [ad 14] */
-        neg16(mcu.r[5]);
-        mcu.pc = 0x4f30;
-        return 1;
-    case 0x4f30: /* SUBX #0x00 r4 [04 00 b4] */
-        subx8_imm(mcu.r[4], 0x00);
-        mcu.pc = 0x4f33;
-        return 1;
-    case 0x4f33: /* SUB r3 r5 [ab 35] */
-        sub16_reg(mcu.r[5], mcu.r[3]);
-        mcu.pc = 0x4f35;
-        return 1;
-    case 0x4f35: /* SUBX r2 r4 [a2 b4] */
-        subx8_reg(mcu.r[4], mcu.r[2]);
-        mcu.pc = 0x4f37;
-        return 1;
-    case 0x4f37: /* TST r4 [a4 16] */
-        tst8_reg(mcu.r[4]);
-        mcu.pc = 0x4f39;
-        return 1;
-    case 0x4f39: /* BPL 6 -> 0x4f41 [2a 06] */
-        mcu.pc = bpl(0x4f41, 0x4f3b);
-        return 1;
-    case 0x4f3b: /* CLR r4 [a4 13] */
-        clr8_reg(mcu.r[4]);
-        mcu.pc = 0x4f3d;
-        return 1;
-    case 0x4f3d: /* CLR r5 [ad 13] */
-        clr16_reg(mcu.r[5]);
-        mcu.pc = 0x4f3f;
-        return 1;
-    case 0x4f3f: /* BRA 21 -> 0x4f56 [20 15] */
-        mcu.pc = 0x4f56;
-        return 1;
-    case 0x4f41: /* NEG r4 [a4 14] */
-        neg8(mcu.r[4]);
-        mcu.pc = 0x4f43;
-        return 1;
-    case 0x4f43: /* NEG r5 [ad 14] */
-        neg16(mcu.r[5]);
-        mcu.pc = 0x4f45;
-        return 1;
-    case 0x4f45: /* SUBX #0x00 r4 [04 00 b4] */
-        subx8_imm(mcu.r[4], 0x00);
-        mcu.pc = 0x4f48;
-        return 1;
-    case 0x4f48: /* BRA 12 -> 0x4f56 [20 0c] */
-        mcu.pc = 0x4f56;
-        return 1;
-    case 0x4f4a: /* SUB r3 r5 [ab 35] */
-        sub16_reg(mcu.r[5], mcu.r[3]);
-        mcu.pc = 0x4f4c;
-        return 1;
-    case 0x4f4c: /* SUBX r2 r4 [a2 b4] */
-        subx8_reg(mcu.r[4], mcu.r[2]);
-        mcu.pc = 0x4f4e;
-        return 1;
-    case 0x4f4e: /* TST r4 [a4 16] */
-        tst8_reg(mcu.r[4]);
-        mcu.pc = 0x4f50;
-        return 1;
-    case 0x4f50: /* BPL 4 -> 0x4f56 [2a 04] */
-        mcu.pc = bpl(0x4f56, 0x4f52);
-        return 1;
-    case 0x4f52: /* CLR r4 [a4 13] */
-        clr8_reg(mcu.r[4]);
-        mcu.pc = 0x4f54;
-        return 1;
-    case 0x4f54: /* CLR r5 [ad 13] */
-        clr16_reg(mcu.r[5]);
-        mcu.pc = 0x4f56;
-        return 1;
-    case 0x4f56: /* MOVG3 r5 -> @r0+66 [e8 42 95] */
-        store16(ind_addr(0, 66), mcu.r[5]);
-        mcu.pc = 0x4f59;
-        return 1;
-    case 0x4f59: /* MOVG3 r4 -> @r0+43 [e0 2b 94] */
-        store8(ind_addr(0, 43), mcu.r[4]);
-        mcu.pc = 0x4f5c;
-        return 1;
-    case 0x4f5c: /* CLR r2 [aa 13] */
-        clr16_reg(mcu.r[2]);
-        mcu.pc = 0x4f5e;
-        return 1;
-    case 0x4f5e: /* MOVG2 @r0+70 r3 [e8 46 83] */
-        load16(mcu.r[3], ind_addr(0, 70));
-        mcu.pc = 0x4f61;
-        return 1;
-    case 0x4f61: /* MOVG2 @r0+45 r2 [e0 2d 82] */
-        load8(mcu.r[2], ind_addr(0, 45));
-        mcu.pc = 0x4f64;
-        return 1;
-    case 0x4f64: /* ADD r5 r3 [ad 23] */
-        add16_reg(mcu.r[3], mcu.r[5]);
-        mcu.pc = 0x4f66;
-        return 1;
-    case 0x4f66: /* ADDX r4 r2 [a4 a2] */
-        addx8_reg(mcu.r[2], mcu.r[4]);
-        mcu.pc = 0x4f68;
-        return 1;
-    case 0x4f68: /* MOVG3 r2 -> @r0+45 [e0 2d 92] */
-        store8(ind_addr(0, 45), mcu.r[2]);
-        mcu.pc = 0x4f6b;
-        return 1;
-    case 0x4f6b: /* MOVG3 r3 -> @r0+70 [e8 46 93] */
-        store16(ind_addr(0, 70), mcu.r[3]);
-        mcu.pc = 0x4f6e;
-        return 1;
-    case 0x4f6e: /* SUB @r0+62 r3 [e8 3e 33] */
-        sub16_mem(mcu.r[3], ind_addr(0, 62));
-        mcu.pc = 0x4f71;
-        return 1;
-    case 0x4f71: /* SUBX @r0+41 r2 [e0 29 b2] */
-        subx8_mem(mcu.r[2], ind_addr(0, 41));
-        mcu.pc = 0x4f74;
-        return 1;
-    case 0x4f74: /* SUB #0x2ee0 r3 [0c 2e e0 33] */
-        sub16_imm(mcu.r[3], 0x2ee0);
-        mcu.pc = 0x4f78;
-        return 1;
-    case 0x4f78: /* SUBX #0x00 r2 [04 00 b2] */
-        subx8_imm(mcu.r[2], 0x00);
-        mcu.pc = 0x4f7b;
-        return 1;
-    case 0x4f7b: /* BPL 79 -> 0x4fcc [2a 4f] */
-        mcu.pc = bpl(0x4fcc, 0x4f7d);
-        return 1;
-    case 0x4f7d: /* EXTS r2 [a2 11] */
-        exts(mcu.r[2]);
-        mcu.pc = 0x4f7f;
-        return 1;
-    case 0x4f7f: /* NOT r2 [aa 15] */
-        not16(mcu.r[2]);
-        mcu.pc = 0x4f81;
-        return 1;
-    case 0x4f81: /* NOT r3 [ab 15] */
-        not16(mcu.r[3]);
-        mcu.pc = 0x4f83;
-        return 1;
-    case 0x4f83: /* ADDQ #1 r3 [ab 08] */
-        addq16(mcu.r[3], 1);
-        mcu.pc = 0x4f85;
-        return 1;
-    case 0x4f85: /* ADDX #0x0000 r2 [0c 00 00 a2] */
-        addx16_imm(mcu.r[2], 0x0000);
-        mcu.pc = 0x4f89;
-        return 1;
-    case 0x4f89: /* DIVXU #0x2ee0 r2:r3 [0c 2e e0 ba] */
-        divxu16_imm(mcu.r[2], mcu.r[3], 0x2ee0);
-        mcu.pc = 0x4f8d;
-        return 1;
-    case 0x4f8d: /* cmp r2,w #0x0000 [4a 00 00] */
-        cmp16_imm(mcu.r[2], 0x0000);
-        mcu.pc = 0x4f90;
-        return 1;
-    case 0x4f90: /* BEQ 8 -> 0x4f9a [27 08] */
-        mcu.pc = beq(0x4f9a, 0x4f92);
-        return 1;
-    case 0x4f92: /* ADDQ #1 r3 [ab 08] */
-        addq16(mcu.r[3], 1);
-        mcu.pc = 0x4f94;
-        return 1;
-    case 0x4f94: /* NEG r2 [aa 14] */
-        neg16(mcu.r[2]);
-        mcu.pc = 0x4f96;
-        return 1;
-    case 0x4f96: /* ADD #0x2ee0 r2 [0c 2e e0 22] */
-        add16_imm(mcu.r[2], 0x2ee0);
-        mcu.pc = 0x4f9a;
-        return 1;
-    case 0x4f9a: /* CLR r1 [a9 13] */
-        clr16_reg(mcu.r[1]);
-        mcu.pc = 0x4f9c;
-        return 1;
-    case 0x4f9c: /* MOVG2 r2 r1 [a2 81] */
-        mov_reg8(mcu.r[1], mcu.r[2]);
-        mcu.pc = 0x4f9e;
-        return 1;
-    case 0x4f9e: /* ADD r1 r1 [a9 21] */
-        add16_reg(mcu.r[1], mcu.r[1]);
-        mcu.pc = 0x4fa0;
-        return 1;
-    case 0x4fa0: /* MOVG2 @r1+0x78ee r4 [f9 78 ee 84] */
-        load16(mcu.r[4], ind_addr(1, 30958));
-        mcu.pc = 0x4fa4;
-        return 1;
-    case 0x4fa4: /* CLR r1 [a9 13] */
-        clr16_reg(mcu.r[1]);
-        mcu.pc = 0x4fa6;
-        return 1;
-    case 0x4fa6: /* SWAP r2 [a2 10] */
-        swap_reg(mcu.r[2]);
-        mcu.pc = 0x4fa8;
-        return 1;
-    case 0x4fa8: /* MOVG2 r2 r1 [a2 81] */
-        mov_reg8(mcu.r[1], mcu.r[2]);
-        mcu.pc = 0x4faa;
-        return 1;
-    case 0x4faa: /* ADD r1 r1 [a9 21] */
-        add16_reg(mcu.r[1], mcu.r[1]);
-        mcu.pc = 0x4fac;
-        return 1;
-    case 0x4fac: /* MOVG2 @r1+0x7aee r1 [f9 7a ee 81] */
-        load16(mcu.r[1], ind_addr(1, 31470));
-        mcu.pc = 0x4fb0;
-        return 1;
-    case 0x4fb0: /* MULXU r1 r4:r5 [a9 ac] */
-        mulxu16_reg(mcu.r[4], mcu.r[5], mcu.r[1]);
-        mcu.pc = 0x4fb2;
-        return 1;
-    case 0x4fb2: /* ROTL r4 [ac 1c] */
-        rotl(mcu.r[4]);
-        mcu.pc = 0x4fb4;
-        return 1;
-    case 0x4fb4: /* ROTL r4 [ac 1c] */
-        rotl(mcu.r[4]);
-        mcu.pc = 0x4fb6;
-        return 1;
-    case 0x4fb6: /* AND #0x03 r4 [04 03 54] */
-        and8_imm(mcu.r[4], 0x03);
-        mcu.pc = 0x4fb9;
-        return 1;
-    case 0x4fb9: /* SWAP r4 [a4 10] */
-        swap_reg(mcu.r[4]);
-        mcu.pc = 0x4fbb;
-        return 1;
-    case 0x4fbb: /* ADD r1 r4 [a9 24] */
-        add16_reg(mcu.r[4], mcu.r[1]);
-        mcu.pc = 0x4fbd;
-        return 1;
-    case 0x4fbd: /* TST r3 [ab 16] */
-        tst16_reg(mcu.r[3]);
-        mcu.pc = 0x4fbf;
-        return 1;
-    case 0x4fbf: /* BEQ 62 -> 0x4fff [27 3e] */
-        mcu.pc = beq(0x4fff, 0x4fc1);
-        return 1;
-    case 0x4fc1: /* SUB #0x0001 r3 [0c 00 01 33] */
-        sub16_imm(mcu.r[3], 0x0001);
-        mcu.pc = 0x4fc5;
-        return 1;
-    case 0x4fc5: /* SHLR r4 [ac 1b] */
-        shlr(mcu.r[4]);
-        mcu.pc = 0x4fc7;
-        return 1;
-    case 0x4fc7: /* cntjmp r3 -5 -> 0x4fc5 [01 bb fb] */
-        mcu.r[3] = (uint16_t)(mcu.r[3] - 1);
-        mcu.pc = (mcu.r[3] != 0xffff) ? 0x4fc5 : 0x4fca;
-        return 1;
-    case 0x4fca: /* BRA 51 -> 0x4fff [20 33] */
-        mcu.pc = 0x4fff;
-        return 1;
-    case 0x4fcc: /* EXTS r2 [a2 11] */
-        exts(mcu.r[2]);
-        mcu.pc = 0x4fce;
-        return 1;
-    case 0x4fce: /* DIVXU #0x2ee0 r2:r3 [0c 2e e0 ba] */
-        divxu16_imm(mcu.r[2], mcu.r[3], 0x2ee0);
-        mcu.pc = 0x4fd2;
-        return 1;
-    case 0x4fd2: /* TST r3 [ab 16] */
-        tst16_reg(mcu.r[3]);
-        mcu.pc = 0x4fd4;
-        return 1;
-    case 0x4fd4: /* BEQ 6 -> 0x4fdc [27 06] */
-        mcu.pc = beq(0x4fdc, 0x4fd6);
-        return 1;
-    case 0x4fd6: /* MOVG2 #0xffff r4 [0c ff ff 84] */
-        load_imm16(mcu.r[4], 0xffff);
-        mcu.pc = 0x4fda;
-        return 1;
-    case 0x4fda: /* BRA 35 -> 0x4fff [20 23] */
-        mcu.pc = 0x4fff;
-        return 1;
-    case 0x4fdc: /* CLR r1 [a9 13] */
-        clr16_reg(mcu.r[1]);
-        mcu.pc = 0x4fde;
-        return 1;
-    case 0x4fde: /* MOVG2 r2 r1 [a2 81] */
-        mov_reg8(mcu.r[1], mcu.r[2]);
-        mcu.pc = 0x4fe0;
-        return 1;
-    case 0x4fe0: /* ADD r1 r1 [a9 21] */
-        add16_reg(mcu.r[1], mcu.r[1]);
-        mcu.pc = 0x4fe2;
-        return 1;
-    case 0x4fe2: /* MOVG2 @r1+0x78ee r4 [f9 78 ee 84] */
-        load16(mcu.r[4], ind_addr(1, 30958));
-        mcu.pc = 0x4fe6;
-        return 1;
-    case 0x4fe6: /* CLR r1 [a9 13] */
-        clr16_reg(mcu.r[1]);
-        mcu.pc = 0x4fe8;
-        return 1;
-    case 0x4fe8: /* SWAP r2 [a2 10] */
-        swap_reg(mcu.r[2]);
-        mcu.pc = 0x4fea;
-        return 1;
-    case 0x4fea: /* MOVG2 r2 r1 [a2 81] */
-        mov_reg8(mcu.r[1], mcu.r[2]);
-        mcu.pc = 0x4fec;
-        return 1;
-    case 0x4fec: /* ADD r1 r1 [a9 21] */
-        add16_reg(mcu.r[1], mcu.r[1]);
-        mcu.pc = 0x4fee;
-        return 1;
-    case 0x4fee: /* MOVG2 @r1+0x7aee r1 [f9 7a ee 81] */
-        load16(mcu.r[1], ind_addr(1, 31470));
-        mcu.pc = 0x4ff2;
-        return 1;
-    case 0x4ff2: /* MULXU r1 r4:r5 [a9 ac] */
-        mulxu16_reg(mcu.r[4], mcu.r[5], mcu.r[1]);
-        mcu.pc = 0x4ff4;
-        return 1;
-    case 0x4ff4: /* ROTL r4 [ac 1c] */
-        rotl(mcu.r[4]);
-        mcu.pc = 0x4ff6;
-        return 1;
-    case 0x4ff6: /* ROTL r4 [ac 1c] */
-        rotl(mcu.r[4]);
-        mcu.pc = 0x4ff8;
-        return 1;
-    case 0x4ff8: /* AND #0x03 r4 [04 03 54] */
-        and8_imm(mcu.r[4], 0x03);
-        mcu.pc = 0x4ffb;
-        return 1;
-    case 0x4ffb: /* SWAP r4 [a4 10] */
-        swap_reg(mcu.r[4]);
-        mcu.pc = 0x4ffd;
-        return 1;
-    case 0x4ffd: /* ADD r1 r4 [a9 24] */
-        add16_reg(mcu.r[4], mcu.r[1]);
-        mcu.pc = 0x4fff;
-        return 1;
-    case 0x4fff: /* MOVG3 r4 -> (dp,0xce3c) [1d ce 3c 94] */
-        store16(dp_addr(0xce3c), mcu.r[4]);
-        mcu.pc = 0x5003;
-        return 1;
-    case 0x5003: /* MOVG2 @r0+46 r1 [e8 2e 81] */
-        load16(mcu.r[1], ind_addr(0, 46));
-        mcu.pc = 0x5006;
-        return 1;
-    case 0x5006: /* CLR r2 [aa 13] */
-        clr16_reg(mcu.r[2]);
-        mcu.pc = 0x5008;
-        return 1;
-    case 0x5008: /* MOVG2 @r1+7 r2 [e1 07 82] */
-        load8(mcu.r[2], ind_addr(1, 7));
-        mcu.pc = 0x500b;
-        return 1;
-    case 0x500b: /* CMP @r0+0x00a4 r2 [f0 00 a4 72] */
-        cmp8_mem(mcu.r[2], ind_addr(0, 164));
-        mcu.pc = 0x500f;
-        return 1;
-    case 0x500f: /* BEQ 0x00c0 -> 0x50d2 [37 00 c0] */
-        mcu.pc = beq(0x50d2, 0x5012);
-        return 1;
-    case 0x5012: /* MOVG3 r2 -> @r0+0x00a4 [f0 00 a4 92] */
-        store8(ind_addr(0, 164), mcu.r[2]);
-        mcu.pc = 0x5016;
-        return 1;
-    case 0x5016: /* MOVG2 @r0+62 r3 [e8 3e 83] */
-        load16(mcu.r[3], ind_addr(0, 62));
-        mcu.pc = 0x5019;
-        return 1;
-    case 0x5019: /* MOVG2 @r0+41 r2 [e0 29 82] */
-        load8(mcu.r[2], ind_addr(0, 41));
-        mcu.pc = 0x501c;
-        return 1;
-    case 0x501c: /* SUB #0x3c68 r3 [0c 3c 68 33] */
-        sub16_imm(mcu.r[3], 0x3c68);
-        mcu.pc = 0x5020;
-        return 1;
-    case 0x5020: /* SUBX #0x01 r2 [04 01 b2] */
-        subx8_imm(mcu.r[2], 0x01);
-        mcu.pc = 0x5023;
-        return 1;
-    case 0x5023: /* BPL 85 -> 0x507a [2a 55] */
-        mcu.pc = bpl(0x507a, 0x5025);
-        return 1;
-    case 0x5025: /* EXTS r2 [a2 11] */
-        exts(mcu.r[2]);
-        mcu.pc = 0x5027;
-        return 1;
-    case 0x5027: /* NOT r2 [aa 15] */
-        not16(mcu.r[2]);
-        mcu.pc = 0x5029;
-        return 1;
-    case 0x5029: /* NOT r3 [ab 15] */
-        not16(mcu.r[3]);
-        mcu.pc = 0x502b;
-        return 1;
-    case 0x502b: /* ADDQ #1 r3 [ab 08] */
-        addq16(mcu.r[3], 1);
-        mcu.pc = 0x502d;
-        return 1;
-    case 0x502d: /* ADDX #0x0000 r2 [0c 00 00 a2] */
-        addx16_imm(mcu.r[2], 0x0000);
-        mcu.pc = 0x5031;
-        return 1;
-    case 0x5031: /* DIVXU #0x2ee0 r2:r3 [0c 2e e0 ba] */
-        divxu16_imm(mcu.r[2], mcu.r[3], 0x2ee0);
-        mcu.pc = 0x5035;
-        return 1;
-    case 0x5035: /* TST r2 [aa 16] */
-        tst16_reg(mcu.r[2]);
-        mcu.pc = 0x5037;
-        return 1;
-    case 0x5037: /* BEQ 8 -> 0x5041 [27 08] */
-        mcu.pc = beq(0x5041, 0x5039);
-        return 1;
-    case 0x5039: /* ADDQ #1 r3 [ab 08] */
-        addq16(mcu.r[3], 1);
-        mcu.pc = 0x503b;
-        return 1;
-    case 0x503b: /* NEG r2 [aa 14] */
-        neg16(mcu.r[2]);
-        mcu.pc = 0x503d;
-        return 1;
-    case 0x503d: /* ADD #0x2ee0 r2 [0c 2e e0 22] */
-        add16_imm(mcu.r[2], 0x2ee0);
-        mcu.pc = 0x5041;
-        return 1;
-    case 0x5041: /* CLR r1 [a9 13] */
-        clr16_reg(mcu.r[1]);
-        mcu.pc = 0x5043;
-        return 1;
-    case 0x5043: /* MOVG2 r2 r1 [a2 81] */
-        mov_reg8(mcu.r[1], mcu.r[2]);
-        mcu.pc = 0x5045;
-        return 1;
-    case 0x5045: /* ADD r1 r1 [a9 21] */
-        add16_reg(mcu.r[1], mcu.r[1]);
-        mcu.pc = 0x5047;
-        return 1;
-    case 0x5047: /* MOVG2 @r1+0x78ee r4 [f9 78 ee 84] */
-        load16(mcu.r[4], ind_addr(1, 30958));
-        mcu.pc = 0x504b;
-        return 1;
-    case 0x504b: /* CLR r1 [a9 13] */
-        clr16_reg(mcu.r[1]);
-        mcu.pc = 0x504d;
-        return 1;
-    case 0x504d: /* SWAP r2 [a2 10] */
-        swap_reg(mcu.r[2]);
-        mcu.pc = 0x504f;
-        return 1;
-    case 0x504f: /* MOVG2 r2 r1 [a2 81] */
-        mov_reg8(mcu.r[1], mcu.r[2]);
-        mcu.pc = 0x5051;
-        return 1;
-    case 0x5051: /* ADD r1 r1 [a9 21] */
-        add16_reg(mcu.r[1], mcu.r[1]);
-        mcu.pc = 0x5053;
-        return 1;
-    case 0x5053: /* MOVG2 @r1+0x7aee r1 [f9 7a ee 81] */
-        load16(mcu.r[1], ind_addr(1, 31470));
-        mcu.pc = 0x5057;
-        return 1;
-    case 0x5057: /* MULXU r1 r4:r5 [a9 ac] */
-        mulxu16_reg(mcu.r[4], mcu.r[5], mcu.r[1]);
-        mcu.pc = 0x5059;
-        return 1;
-    case 0x5059: /* ROTL r4 [ac 1c] */
-        rotl(mcu.r[4]);
-        mcu.pc = 0x505b;
-        return 1;
-    case 0x505b: /* ROTL r4 [ac 1c] */
-        rotl(mcu.r[4]);
-        mcu.pc = 0x505d;
-        return 1;
-    case 0x505d: /* AND #0x03 r4 [04 03 54] */
-        and8_imm(mcu.r[4], 0x03);
-        mcu.pc = 0x5060;
-        return 1;
-    case 0x5060: /* SWAP r4 [a4 10] */
-        swap_reg(mcu.r[4]);
-        mcu.pc = 0x5062;
-        return 1;
-    case 0x5062: /* ADD r1 r4 [a9 24] */
-        add16_reg(mcu.r[4], mcu.r[1]);
-        mcu.pc = 0x5064;
-        return 1;
-    case 0x5064: /* TST r3 [ab 16] */
-        tst16_reg(mcu.r[3]);
-        mcu.pc = 0x5066;
-        return 1;
-    case 0x5066: /* BEQ 69 -> 0x50ad [27 45] */
-        mcu.pc = beq(0x50ad, 0x5068);
-        return 1;
-    case 0x5068: /* SUB #0x0001 r3 [0c 00 01 33] */
-        sub16_imm(mcu.r[3], 0x0001);
-        mcu.pc = 0x506c;
-        return 1;
-    case 0x506c: /* SHLR r4 [ac 1b] */
-        shlr(mcu.r[4]);
-        mcu.pc = 0x506e;
-        return 1;
-    case 0x506e: /* cntjmp r3 -5 -> 0x506c [01 bb fb] */
-        mcu.r[3] = (uint16_t)(mcu.r[3] - 1);
-        mcu.pc = (mcu.r[3] != 0xffff) ? 0x506c : 0x5071;
-        return 1;
-    case 0x5071: /* TST r4 [ac 16] */
-        tst16_reg(mcu.r[4]);
-        mcu.pc = 0x5073;
-        return 1;
-    case 0x5073: /* BNE 56 -> 0x50ad [26 38] */
-        mcu.pc = bne(0x50ad, 0x5075);
-        return 1;
-    case 0x5075: /* movi r4 #0x0001 [5c 00 01] */
-        movi16(mcu.r[4], 0x0001);
-        mcu.pc = 0x5078;
-        return 1;
-    case 0x5078: /* BRA 51 -> 0x50ad [20 33] */
-        mcu.pc = 0x50ad;
-        return 1;
-    case 0x507a: /* EXTS r2 [a2 11] */
-        exts(mcu.r[2]);
-        mcu.pc = 0x507c;
-        return 1;
-    case 0x507c: /* DIVXU #0x2ee0 r2:r3 [0c 2e e0 ba] */
-        divxu16_imm(mcu.r[2], mcu.r[3], 0x2ee0);
-        mcu.pc = 0x5080;
-        return 1;
-    case 0x5080: /* TST r3 [ab 16] */
-        tst16_reg(mcu.r[3]);
-        mcu.pc = 0x5082;
-        return 1;
-    case 0x5082: /* BEQ 6 -> 0x508a [27 06] */
-        mcu.pc = beq(0x508a, 0x5084);
-        return 1;
-    case 0x5084: /* MOVG2 #0xffff r4 [0c ff ff 84] */
-        load_imm16(mcu.r[4], 0xffff);
-        mcu.pc = 0x5088;
-        return 1;
-    case 0x5088: /* BRA 35 -> 0x50ad [20 23] */
-        mcu.pc = 0x50ad;
-        return 1;
-    case 0x508a: /* CLR r1 [a9 13] */
-        clr16_reg(mcu.r[1]);
-        mcu.pc = 0x508c;
-        return 1;
-    case 0x508c: /* MOVG2 r2 r1 [a2 81] */
-        mov_reg8(mcu.r[1], mcu.r[2]);
-        mcu.pc = 0x508e;
-        return 1;
-    case 0x508e: /* ADD r1 r1 [a9 21] */
-        add16_reg(mcu.r[1], mcu.r[1]);
-        mcu.pc = 0x5090;
-        return 1;
-    case 0x5090: /* MOVG2 @r1+0x78ee r4 [f9 78 ee 84] */
-        load16(mcu.r[4], ind_addr(1, 30958));
-        mcu.pc = 0x5094;
-        return 1;
-    case 0x5094: /* CLR r1 [a9 13] */
-        clr16_reg(mcu.r[1]);
-        mcu.pc = 0x5096;
-        return 1;
-    case 0x5096: /* SWAP r2 [a2 10] */
-        swap_reg(mcu.r[2]);
-        mcu.pc = 0x5098;
-        return 1;
-    case 0x5098: /* MOVG2 r2 r1 [a2 81] */
-        mov_reg8(mcu.r[1], mcu.r[2]);
-        mcu.pc = 0x509a;
-        return 1;
-    case 0x509a: /* ADD r1 r1 [a9 21] */
-        add16_reg(mcu.r[1], mcu.r[1]);
-        mcu.pc = 0x509c;
-        return 1;
-    case 0x509c: /* MOVG2 @r1+0x7aee r1 [f9 7a ee 81] */
-        load16(mcu.r[1], ind_addr(1, 31470));
-        mcu.pc = 0x50a0;
-        return 1;
-    case 0x50a0: /* MULXU r1 r4:r5 [a9 ac] */
-        mulxu16_reg(mcu.r[4], mcu.r[5], mcu.r[1]);
-        mcu.pc = 0x50a2;
-        return 1;
-    case 0x50a2: /* ROTL r4 [ac 1c] */
-        rotl(mcu.r[4]);
-        mcu.pc = 0x50a4;
-        return 1;
-    case 0x50a4: /* ROTL r4 [ac 1c] */
-        rotl(mcu.r[4]);
-        mcu.pc = 0x50a6;
-        return 1;
-    case 0x50a6: /* AND #0x03 r4 [04 03 54] */
-        and8_imm(mcu.r[4], 0x03);
-        mcu.pc = 0x50a9;
-        return 1;
-    case 0x50a9: /* SWAP r4 [a4 10] */
-        swap_reg(mcu.r[4]);
-        mcu.pc = 0x50ab;
-        return 1;
-    case 0x50ab: /* ADD r1 r4 [a9 24] */
-        add16_reg(mcu.r[4], mcu.r[1]);
-        mcu.pc = 0x50ad;
-        return 1;
-    case 0x50ad: /* CLR r3 [ab 13] */
-        clr16_reg(mcu.r[3]);
-        mcu.pc = 0x50af;
-        return 1;
-    case 0x50af: /* CLR r2 [aa 13] */
-        clr16_reg(mcu.r[2]);
-        mcu.pc = 0x50b1;
-        return 1;
-    case 0x50b1: /* MOVG2 @r0+0x00a4 r2 [f0 00 a4 82] */
-        load8(mcu.r[2], ind_addr(0, 164));
-        mcu.pc = 0x50b5;
-        return 1;
-    case 0x50b5: /* SUB #0x80 r2 [04 80 32] */
-        sub8_imm(mcu.r[2], 0x80);
-        mcu.pc = 0x50b8;
-        return 1;
-    case 0x50b8: /* BMI 9 -> 0x50c3 [2b 09] */
-        mcu.pc = bmi(0x50c3, 0x50ba);
-        return 1;
-    case 0x50ba: /* DIVXU r4 r2:r3 [ac ba] */
-        divxu16_reg(mcu.r[2], mcu.r[3], mcu.r[4]);
-        mcu.pc = 0x50bc;
-        return 1;
-    case 0x50bc: /* BGE 16 -> 0x50ce [2c 10] */
-        mcu.pc = bge(0x50ce, 0x50be);
-        return 1;
-    case 0x50be: /* movi r3 #0x7fff [5b 7f ff] */
-        movi16(mcu.r[3], 0x7fff);
-        mcu.pc = 0x50c1;
-        return 1;
-    case 0x50c1: /* BRA 11 -> 0x50ce [20 0b] */
-        mcu.pc = 0x50ce;
-        return 1;
-    case 0x50c3: /* NEG r2 [a2 14] */
-        neg8(mcu.r[2]);
-        mcu.pc = 0x50c5;
-        return 1;
-    case 0x50c5: /* DIVXU r4 r2:r3 [ac ba] */
-        divxu16_reg(mcu.r[2], mcu.r[3], mcu.r[4]);
-        mcu.pc = 0x50c7;
-        return 1;
-    case 0x50c7: /* BGE 3 -> 0x50cc [2c 03] */
-        mcu.pc = bge(0x50cc, 0x50c9);
-        return 1;
-    case 0x50c9: /* movi r3 #0x7fff [5b 7f ff] */
-        movi16(mcu.r[3], 0x7fff);
-        mcu.pc = 0x50cc;
-        return 1;
-    case 0x50cc: /* NEG r3 [ab 14] */
-        neg16(mcu.r[3]);
-        mcu.pc = 0x50ce;
-        return 1;
-    case 0x50ce: /* MOVG3 r3 -> @r0+0x00a6 [f8 00 a6 93] */
-        store16(ind_addr(0, 166), mcu.r[3]);
-        mcu.pc = 0x50d2;
-        return 1;
-    case 0x50d2: /* MOVG2 @r0+0x00a6 r4 [f8 00 a6 84] */
-        load16(mcu.r[4], ind_addr(0, 166));
-        mcu.pc = 0x50d6;
-        return 1;
-    case 0x50d6: /* BMI 11 -> 0x50e3 [2b 0b] */
-        mcu.pc = bmi(0x50e3, 0x50d8);
-        return 1;
-    case 0x50d8: /* ADD (dp,0xce3c) r4 [1d ce 3c 24] */
-        add16_mem(mcu.r[4], dp_addr(0xce3c));
-        mcu.pc = 0x50dc;
-        return 1;
-    case 0x50dc: /* BCC 13 -> 0x50eb [24 0d] */
-        mcu.pc = bcc(0x50eb, 0x50de);
-        return 1;
-    case 0x50de: /* movi r4 #0xffff [5c ff ff] */
-        movi16(mcu.r[4], 0xffff);
-        mcu.pc = 0x50e1;
-        return 1;
-    case 0x50e1: /* BRA 8 -> 0x50eb [20 08] */
-        mcu.pc = 0x50eb;
-        return 1;
-    case 0x50e3: /* ADD (dp,0xce3c) r4 [1d ce 3c 24] */
-        add16_mem(mcu.r[4], dp_addr(0xce3c));
-        mcu.pc = 0x50e7;
-        return 1;
-    case 0x50e7: /* BCS 2 -> 0x50eb [25 02] */
-        mcu.pc = bcs(0x50eb, 0x50e9);
-        return 1;
-    case 0x50e9: /* CLR r4 [ac 13] */
-        clr16_reg(mcu.r[4]);
-        mcu.pc = 0x50eb;
-        return 1;
-    case 0x50eb: /* MOVG3 r4 -> @r0+72 [e8 48 94] */
-        store16(ind_addr(0, 72), mcu.r[4]);
-        mcu.pc = 0x50ee;
-        return 1;
-    case 0x50ee: /* rts [19] */
-        mcu.pc = MCU_PopStack();
-        return 1;
-    default:
-        stock_instruction();
-        return 1;
-    }
+    add16_mem(mcu.r[2], ind_addr(0, 22));
+    mcu.pc = 0x4dee;
 }
 
-/* One entry per instruction PC of 0x4DE7..0x50EE (302 PCs, L0 returns 1). */
-const uint16_t kDspRatePcs[] = {
-    0x4de7, 0x4deb, 0x4dee, 0x4df1, 0x4df4, 0x4df7, 0x4dfb, 0x4dfd,
-    0x4dff, 0x4e03, 0x4e07, 0x4e0a, 0x4e0d, 0x4e10, 0x4e13, 0x4e17,
-    0x4e19, 0x4e1c, 0x4e1f, 0x4e21, 0x4e23, 0x4e26, 0x4e29, 0x4e2c,
-    0x4e2f, 0x4e32, 0x4e35, 0x4e37, 0x4e3a, 0x4e3d, 0x4e3f, 0x4e42,
-    0x4e45, 0x4e47, 0x4e4a, 0x4e4d, 0x4e50, 0x4e53, 0x4e56, 0x4e59,
-    0x4e5c, 0x4e60, 0x4e62, 0x4e64, 0x4e66, 0x4e69, 0x4e6b, 0x4e6d,
-    0x4e6f, 0x4e71, 0x4e73, 0x4e76, 0x4e78, 0x4e7a, 0x4e7c, 0x4e7f,
-    0x4e81, 0x4e83, 0x4e86, 0x4e88, 0x4e8b, 0x4e8e, 0x4e91, 0x4e94,
-    0x4e98, 0x4e9b, 0x4e9e, 0x4ea1, 0x4ea5, 0x4ea8, 0x4eab, 0x4eae,
-    0x4eb1, 0x4eb5, 0x4eb9, 0x4ebb, 0x4ebd, 0x4ec0, 0x4ec2, 0x4ec4,
-    0x4ec6, 0x4ec9, 0x4ecb, 0x4ecd, 0x4ecf, 0x4ed1, 0x4ed4, 0x4ed8,
-    0x4eda, 0x4ede, 0x4ee0, 0x4ee2, 0x4ee5, 0x4ee7, 0x4ee9, 0x4eeb,
-    0x4eee, 0x4ef0, 0x4ef2, 0x4ef4, 0x4ef6, 0x4ef9, 0x4efc, 0x4eff,
-    0x4f02, 0x4f04, 0x4f06, 0x4f08, 0x4f0a, 0x4f0d, 0x4f10, 0x4f12,
-    0x4f15, 0x4f17, 0x4f1a, 0x4f1c, 0x4f1e, 0x4f22, 0x4f26, 0x4f28,
-    0x4f2a, 0x4f2c, 0x4f2e, 0x4f30, 0x4f33, 0x4f35, 0x4f37, 0x4f39,
-    0x4f3b, 0x4f3d, 0x4f3f, 0x4f41, 0x4f43, 0x4f45, 0x4f48, 0x4f4a,
-    0x4f4c, 0x4f4e, 0x4f50, 0x4f52, 0x4f54, 0x4f56, 0x4f59, 0x4f5c,
-    0x4f5e, 0x4f61, 0x4f64, 0x4f66, 0x4f68, 0x4f6b, 0x4f6e, 0x4f71,
-    0x4f74, 0x4f78, 0x4f7b, 0x4f7d, 0x4f7f, 0x4f81, 0x4f83, 0x4f85,
-    0x4f89, 0x4f8d, 0x4f90, 0x4f92, 0x4f94, 0x4f96, 0x4f9a, 0x4f9c,
-    0x4f9e, 0x4fa0, 0x4fa4, 0x4fa6, 0x4fa8, 0x4faa, 0x4fac, 0x4fb0,
-    0x4fb2, 0x4fb4, 0x4fb6, 0x4fb9, 0x4fbb, 0x4fbd, 0x4fbf, 0x4fc1,
-    0x4fc5, 0x4fc7, 0x4fca, 0x4fcc, 0x4fce, 0x4fd2, 0x4fd4, 0x4fd6,
-    0x4fda, 0x4fdc, 0x4fde, 0x4fe0, 0x4fe2, 0x4fe6, 0x4fe8, 0x4fea,
-    0x4fec, 0x4fee, 0x4ff2, 0x4ff4, 0x4ff6, 0x4ff8, 0x4ffb, 0x4ffd,
-    0x4fff, 0x5003, 0x5006, 0x5008, 0x500b, 0x500f, 0x5012, 0x5016,
-    0x5019, 0x501c, 0x5020, 0x5023, 0x5025, 0x5027, 0x5029, 0x502b,
-    0x502d, 0x5031, 0x5035, 0x5037, 0x5039, 0x503b, 0x503d, 0x5041,
-    0x5043, 0x5045, 0x5047, 0x504b, 0x504d, 0x504f, 0x5051, 0x5053,
-    0x5057, 0x5059, 0x505b, 0x505d, 0x5060, 0x5062, 0x5064, 0x5066,
-    0x5068, 0x506c, 0x506e, 0x5071, 0x5073, 0x5075, 0x5078, 0x507a,
-    0x507c, 0x5080, 0x5082, 0x5084, 0x5088, 0x508a, 0x508c, 0x508e,
-    0x5090, 0x5094, 0x5096, 0x5098, 0x509a, 0x509c, 0x50a0, 0x50a2,
-    0x50a4, 0x50a6, 0x50a9, 0x50ab, 0x50ad, 0x50af, 0x50b1, 0x50b5,
-    0x50b8, 0x50ba, 0x50bc, 0x50be, 0x50c1, 0x50c3, 0x50c5, 0x50c7,
-    0x50c9, 0x50cc, 0x50ce, 0x50d2, 0x50d6, 0x50d8, 0x50dc, 0x50de,
-    0x50e1, 0x50e3, 0x50e7, 0x50e9, 0x50eb, 0x50ee,
-};
+/* 0x4dee CLR @r0+22. */
+void step_dsp_rate_clr_r0_22(void)
+{
+    clr16_mem(ind_addr(0, 22));
+    mcu.pc = 0x4df1;
+}
+
+/* 0x4df1 MULXU @r0+124 r2:r3. */
+void step_dsp_rate_mulxu_r0_124_r2_r3(void)
+{
+    mulxu16_mem(mcu.r[2], mcu.r[3], ind_addr(0, 124));
+    mcu.pc = 0x4df4;
+}
+
+/* 0x4df4 ADD @r0+12 r3. */
+void step_dsp_rate_add_r0_12_r3(void)
+{
+    add16_mem(mcu.r[3], ind_addr(0, 12));
+    mcu.pc = 0x4df7;
+}
+
+/* 0x4df7 ADDX #0x0000 r2. */
+void step_dsp_rate_addx_0x0000_r2(void)
+{
+    addx16_imm(mcu.r[2], 0x0000);
+    mcu.pc = 0x4dfb;
+}
+
+/* 0x4dfb TST r2. */
+void step_dsp_rate_tst_r2(void)
+{
+    tst16_reg(mcu.r[2]);
+    mcu.pc = 0x4dfd;
+}
+
+/* 0x4dfd BEQ 17 -> 0x4e10. */
+void step_dsp_rate_beq_17_to_0x4e10(void)
+{
+    mcu.pc = beq(0x4e10, 0x4dff);
+}
+
+/* 0x4dff SUB #0xffff r3. */
+void step_dsp_rate_sub_0xffff_r3(void)
+{
+    sub16_imm(mcu.r[3], 0xffff);
+    mcu.pc = 0x4e03;
+}
+
+/* 0x4e03 SUBX #0x0000 r2. */
+void step_dsp_rate_subx_0x0000_r2(void)
+{
+    subx16_imm(mcu.r[2], 0x0000);
+    mcu.pc = 0x4e07;
+}
+
+/* 0x4e07 DIVXU @r0+124 r2:r3. */
+void step_dsp_rate_divxu_r0_124_r2_r3(void)
+{
+    divxu16_mem(mcu.r[2], mcu.r[3], ind_addr(0, 124));
+    mcu.pc = 0x4e0a;
+}
+
+/* 0x4e0a MOVG3 r3 -> @r0+22. */
+void step_dsp_rate_movg3_r3_to_r0_22(void)
+{
+    store16(ind_addr(0, 22), mcu.r[3]);
+    mcu.pc = 0x4e0d;
+}
+
+/* 0x4e0d movi r3 #0xffff. */
+void step_dsp_rate_movi_r3_0xffff(void)
+{
+    movi16(mcu.r[3], 0xffff);
+    mcu.pc = 0x4e10;
+}
+
+/* 0x4e10 MOVG3 r3 -> @r0+12. */
+void step_dsp_rate_movg3_r3_to_r0_12(void)
+{
+    store16(ind_addr(0, 12), mcu.r[3]);
+    mcu.pc = 0x4e13;
+}
+
+/* 0x4e13 SUB @r0+-3 #0x00. */
+void step_dsp_rate_sub_r0_neg_3_0x00(void)
+{
+    sub8_mem_imm_flags(ind_addr(0, -3), 0x00);
+    mcu.pc = 0x4e17;
+}
+
+/* 0x4e17 BNE 30 -> 0x4e37. */
+void step_dsp_rate_bne_30_to_0x4e37(void)
+{
+    mcu.pc = bne(0x4e37, 0x4e19);
+}
+
+/* 0x4e19 MOVG2 @r0+114 r4. */
+void step_dsp_rate_movg2_r0_114_r4(void)
+{
+    load16(mcu.r[4], ind_addr(0, 114));
+    mcu.pc = 0x4e1c;
+}
+
+/* 0x4e1c SUB @r0+112 r4. */
+void step_dsp_rate_sub_r0_112_r4(void)
+{
+    sub16_mem(mcu.r[4], ind_addr(0, 112));
+    mcu.pc = 0x4e1f;
+}
+
+/* 0x4e1f MULXU r3 r4:r5. */
+void step_dsp_rate_mulxu_r3_r4_r5(void)
+{
+    mulxu16_reg(mcu.r[4], mcu.r[5], mcu.r[3]);
+    mcu.pc = 0x4e21;
+}
+
+/* 0x4e21 CLR r3. */
+void step_dsp_rate_clr_r3(void)
+{
+    clr16_reg(mcu.r[3]);
+    mcu.pc = 0x4e23;
+}
+
+/* 0x4e23 ADD @r0+112 r4. */
+void step_dsp_rate_add_r0_112_r4(void)
+{
+    add16_mem(mcu.r[4], ind_addr(0, 112));
+    mcu.pc = 0x4e26;
+}
+
+/* 0x4e26 ADDX @r0+106 r3. */
+void step_dsp_rate_addx_r0_106_r3(void)
+{
+    addx8_mem(mcu.r[3], ind_addr(0, 106));
+    mcu.pc = 0x4e29;
+}
+
+/* 0x4e29 MOVG3 r3 -> @r0+44. */
+void step_dsp_rate_movg3_r3_to_r0_44(void)
+{
+    store8(ind_addr(0, 44), mcu.r[3]);
+    mcu.pc = 0x4e2c;
+}
+
+/* 0x4e2c MOVG3 r4 -> @r0+68. */
+void step_dsp_rate_movg3_r4_to_r0_68(void)
+{
+    store16(ind_addr(0, 68), mcu.r[4]);
+    mcu.pc = 0x4e2f;
+}
+
+/* 0x4e2f MOVG3 r3 -> @r0+45. */
+void step_dsp_rate_movg3_r3_to_r0_45(void)
+{
+    store8(ind_addr(0, 45), mcu.r[3]);
+    mcu.pc = 0x4e32;
+}
+
+/* 0x4e32 MOVG3 r4 -> @r0+70. */
+void step_dsp_rate_movg3_r4_to_r0_70(void)
+{
+    store16(ind_addr(0, 70), mcu.r[4]);
+    mcu.pc = 0x4e35;
+}
+
+/* 0x4e35 BRA 31 -> 0x4e56. */
+void step_dsp_rate_bra_31_to_0x4e56(void)
+{
+    mcu.pc = 0x4e56;
+}
+
+/* 0x4e37 MOVG2 @r0+112 r4. */
+void step_dsp_rate_movg2_r0_112_r4(void)
+{
+    load16(mcu.r[4], ind_addr(0, 112));
+    mcu.pc = 0x4e3a;
+}
+
+/* 0x4e3a SUB @r0+114 r4. */
+void step_dsp_rate_sub_r0_114_r4(void)
+{
+    sub16_mem(mcu.r[4], ind_addr(0, 114));
+    mcu.pc = 0x4e3d;
+}
+
+/* 0x4e3d MULXU r3 r4:r5. */
+void step_dsp_rate_mulxu_r3_r4_r5_a(void)
+{
+    mulxu16_reg(mcu.r[4], mcu.r[5], mcu.r[3]);
+    mcu.pc = 0x4e3f;
+}
+
+/* 0x4e3f MOVG2 @r0+112 r6. */
+void step_dsp_rate_movg2_r0_112_r6(void)
+{
+    load16(mcu.r[6], ind_addr(0, 112));
+    mcu.pc = 0x4e42;
+}
+
+/* 0x4e42 MOVG2 @r0+106 r5. */
+void step_dsp_rate_movg2_r0_106_r5(void)
+{
+    load8(mcu.r[5], ind_addr(0, 106));
+    mcu.pc = 0x4e45;
+}
+
+/* 0x4e45 SUB r4 r6. */
+void step_dsp_rate_sub_r4_r6(void)
+{
+    sub16_reg(mcu.r[6], mcu.r[4]);
+    mcu.pc = 0x4e47;
+}
+
+/* 0x4e47 SUBX #0x00 r5. */
+void step_dsp_rate_subx_0x00_r5(void)
+{
+    subx8_imm(mcu.r[5], 0x00);
+    mcu.pc = 0x4e4a;
+}
+
+/* 0x4e4a MOVG3 r5 -> @r0+44. */
+void step_dsp_rate_movg3_r5_to_r0_44(void)
+{
+    store8(ind_addr(0, 44), mcu.r[5]);
+    mcu.pc = 0x4e4d;
+}
+
+/* 0x4e4d MOVG3 r6 -> @r0+68. */
+void step_dsp_rate_movg3_r6_to_r0_68(void)
+{
+    store16(ind_addr(0, 68), mcu.r[6]);
+    mcu.pc = 0x4e50;
+}
+
+/* 0x4e50 MOVG3 r5 -> @r0+45. */
+void step_dsp_rate_movg3_r5_to_r0_45(void)
+{
+    store8(ind_addr(0, 45), mcu.r[5]);
+    mcu.pc = 0x4e53;
+}
+
+/* 0x4e53 MOVG3 r6 -> @r0+70. */
+void step_dsp_rate_movg3_r6_to_r0_70(void)
+{
+    store16(ind_addr(0, 70), mcu.r[6]);
+    mcu.pc = 0x4e56;
+}
+
+/* 0x4e56 MOVG2 @r0+45 r5. */
+void step_dsp_rate_movg2_r0_45_r5(void)
+{
+    load8(mcu.r[5], ind_addr(0, 45));
+    mcu.pc = 0x4e59;
+}
+
+/* 0x4e59 MOVG2 @r0+70 r6. */
+void step_dsp_rate_movg2_r0_70_r6(void)
+{
+    load16(mcu.r[6], ind_addr(0, 70));
+    mcu.pc = 0x4e5c;
+}
+
+/* 0x4e5c MOVG2 @r0+0x0086 r2. */
+void step_dsp_rate_movg2_r0_0x0086_r2(void)
+{
+    load16(mcu.r[2], ind_addr(0, 134));
+    mcu.pc = 0x4e60;
+}
+
+/* 0x4e60 BPL 15 -> 0x4e71. */
+void step_dsp_rate_bpl_15_to_0x4e71(void)
+{
+    mcu.pc = bpl(0x4e71, 0x4e62);
+}
+
+/* 0x4e62 NEG r2. */
+void step_dsp_rate_neg_r2(void)
+{
+    neg16(mcu.r[2]);
+    mcu.pc = 0x4e64;
+}
+
+/* 0x4e64 SUB r2 r6. */
+void step_dsp_rate_sub_r2_r6(void)
+{
+    sub16_reg(mcu.r[6], mcu.r[2]);
+    mcu.pc = 0x4e66;
+}
+
+/* 0x4e66 SUBX #0x00 r5. */
+void step_dsp_rate_subx_0x00_r5_a(void)
+{
+    subx8_imm(mcu.r[5], 0x00);
+    mcu.pc = 0x4e69;
+}
+
+/* 0x4e69 BCC 32 -> 0x4e8b. */
+void step_dsp_rate_bcc_32_to_0x4e8b(void)
+{
+    mcu.pc = bcc(0x4e8b, 0x4e6b);
+}
+
+/* 0x4e6b CLR r6. */
+void step_dsp_rate_clr_r6(void)
+{
+    clr16_reg(mcu.r[6]);
+    mcu.pc = 0x4e6d;
+}
+
+/* 0x4e6d CLR r5. */
+void step_dsp_rate_clr_r5(void)
+{
+    clr8_reg(mcu.r[5]);
+    mcu.pc = 0x4e6f;
+}
+
+/* 0x4e6f BRA 26 -> 0x4e8b. */
+void step_dsp_rate_bra_26_to_0x4e8b(void)
+{
+    mcu.pc = 0x4e8b;
+}
+
+/* 0x4e71 ADD r2 r6. */
+void step_dsp_rate_add_r2_r6(void)
+{
+    add16_reg(mcu.r[6], mcu.r[2]);
+    mcu.pc = 0x4e73;
+}
+
+/* 0x4e73 ADDX #0x00 r5. */
+void step_dsp_rate_addx_0x00_r5(void)
+{
+    addx8_imm(mcu.r[5], 0x00);
+    mcu.pc = 0x4e76;
+}
+
+/* 0x4e76 cmp r5,b #0x01. */
+void step_dsp_rate_cmp_r5_b_0x01(void)
+{
+    cmp8_imm(mcu.r[5], 0x01);
+    mcu.pc = 0x4e78;
+}
+
+/* 0x4e78 BEQ 9 -> 0x4e83. */
+void step_dsp_rate_beq_9_to_0x4e83(void)
+{
+    mcu.pc = beq(0x4e83, 0x4e7a);
+}
+
+/* 0x4e7a BCS 15 -> 0x4e8b. */
+void step_dsp_rate_bcs_15_to_0x4e8b(void)
+{
+    mcu.pc = bcs(0x4e8b, 0x4e7c);
+}
+
+/* 0x4e7c movi r6 #0xf018. */
+void step_dsp_rate_movi_r6_0xf018(void)
+{
+    movi16(mcu.r[6], 0xf018);
+    mcu.pc = 0x4e7f;
+}
+
+/* 0x4e7f move r5 #0x01. */
+void step_dsp_rate_move_r5_0x01(void)
+{
+    move8(mcu.r[5], 0x01);
+    mcu.pc = 0x4e81;
+}
+
+/* 0x4e81 BRA 8 -> 0x4e8b. */
+void step_dsp_rate_bra_8_to_0x4e8b(void)
+{
+    mcu.pc = 0x4e8b;
+}
+
+/* 0x4e83 cmp r6,w #0xf018. */
+void step_dsp_rate_cmp_r6_w_0xf018(void)
+{
+    cmp16_imm(mcu.r[6], 0xf018);
+    mcu.pc = 0x4e86;
+}
+
+/* 0x4e86 BLS 3 -> 0x4e8b. */
+void step_dsp_rate_bls_3_to_0x4e8b(void)
+{
+    mcu.pc = bls(0x4e8b, 0x4e88);
+}
+
+/* 0x4e88 movi r6 #0xf018. */
+void step_dsp_rate_movi_r6_0xf018_a(void)
+{
+    movi16(mcu.r[6], 0xf018);
+    mcu.pc = 0x4e8b;
+}
+
+/* 0x4e8b MOVG3 r5 -> @r0+45. */
+void step_dsp_rate_movg3_r5_to_r0_45_a(void)
+{
+    store8(ind_addr(0, 45), mcu.r[5]);
+    mcu.pc = 0x4e8e;
+}
+
+/* 0x4e8e MOVG3 r6 -> @r0+70. */
+void step_dsp_rate_movg3_r6_to_r0_70_a(void)
+{
+    store16(ind_addr(0, 70), mcu.r[6]);
+    mcu.pc = 0x4e91;
+}
+
+/* 0x4e91 MOVG2 @r0+-118 r2. */
+void step_dsp_rate_movg2_r0_neg_118_r2(void)
+{
+    load16(mcu.r[2], ind_addr(0, -118));
+    mcu.pc = 0x4e94;
+}
+
+/* 0x4e94 MOVG2 @r0+0x0090 r3. */
+void step_dsp_rate_movg2_r0_0x0090_r3(void)
+{
+    load16(mcu.r[3], ind_addr(0, 144));
+    mcu.pc = 0x4e98;
+}
+
+/* 0x4e98 MOVG2 @r0+-96 r6. */
+void step_dsp_rate_movg2_r0_neg_96_r6(void)
+{
+    load16(mcu.r[6], ind_addr(0, -96));
+    mcu.pc = 0x4e9b;
+}
+
+/* 0x4e9b bsr16 -> 0x50ef. */
+void step_dsp_rate_bsr16_to_0x50ef(void)
+{
+    MCU_PushStack(0x4e9e);
+    mcu.pc = 0x50ef;
+}
+
+/* 0x4e9e MOVG2 @r0+-84 r2. */
+void step_dsp_rate_movg2_r0_neg_84_r2(void)
+{
+    load16(mcu.r[2], ind_addr(0, -84));
+    mcu.pc = 0x4ea1;
+}
+
+/* 0x4ea1 MOVG2 @r0+0x0092 r3. */
+void step_dsp_rate_movg2_r0_0x0092_r3(void)
+{
+    load16(mcu.r[3], ind_addr(0, 146));
+    mcu.pc = 0x4ea5;
+}
+
+/* 0x4ea5 MOVG2 @r0+-62 r6. */
+void step_dsp_rate_movg2_r0_neg_62_r6(void)
+{
+    load16(mcu.r[6], ind_addr(0, -62));
+    mcu.pc = 0x4ea8;
+}
+
+/* 0x4ea8 bsr16 -> 0x50ef. */
+void step_dsp_rate_bsr16_to_0x50ef_a(void)
+{
+    MCU_PushStack(0x4eab);
+    mcu.pc = 0x50ef;
+}
+
+/* 0x4eab MOVG2 @r0+45 r5. */
+void step_dsp_rate_movg2_r0_45_r5_a(void)
+{
+    load8(mcu.r[5], ind_addr(0, 45));
+    mcu.pc = 0x4eae;
+}
+
+/* 0x4eae MOVG2 @r0+70 r6. */
+void step_dsp_rate_movg2_r0_70_r6_a(void)
+{
+    load16(mcu.r[6], ind_addr(0, 70));
+    mcu.pc = 0x4eb1;
+}
+
+/* 0x4eb1 MOVG2 (dp,0x8000) r3. */
+void step_dsp_rate_movg2_dp_0x8000_r3(void)
+{
+    load16(mcu.r[3], dp_addr(0x8000));
+    mcu.pc = 0x4eb5;
+}
+
+/* 0x4eb5 SUB #0x0400 r3. */
+void step_dsp_rate_sub_0x0400_r3(void)
+{
+    sub16_imm(mcu.r[3], 0x0400);
+    mcu.pc = 0x4eb9;
+}
+
+/* 0x4eb9 BMI 7 -> 0x4ec2. */
+void step_dsp_rate_bmi_7_to_0x4ec2(void)
+{
+    mcu.pc = bmi(0x4ec2, 0x4ebb);
+}
+
+/* 0x4ebb ADD r3 r6. */
+void step_dsp_rate_add_r3_r6(void)
+{
+    add16_reg(mcu.r[6], mcu.r[3]);
+    mcu.pc = 0x4ebd;
+}
+
+/* 0x4ebd ADDX #0x00 r5. */
+void step_dsp_rate_addx_0x00_r5_a(void)
+{
+    addx8_imm(mcu.r[5], 0x00);
+    mcu.pc = 0x4ec0;
+}
+
+/* 0x4ec0 BRA 15 -> 0x4ed1. */
+void step_dsp_rate_bra_15_to_0x4ed1(void)
+{
+    mcu.pc = 0x4ed1;
+}
+
+/* 0x4ec2 NEG r3. */
+void step_dsp_rate_neg_r3(void)
+{
+    neg16(mcu.r[3]);
+    mcu.pc = 0x4ec4;
+}
+
+/* 0x4ec4 SUB r3 r6. */
+void step_dsp_rate_sub_r3_r6(void)
+{
+    sub16_reg(mcu.r[6], mcu.r[3]);
+    mcu.pc = 0x4ec6;
+}
+
+/* 0x4ec6 SUBX #0x00 r5. */
+void step_dsp_rate_subx_0x00_r5_b(void)
+{
+    subx8_imm(mcu.r[5], 0x00);
+    mcu.pc = 0x4ec9;
+}
+
+/* 0x4ec9 TST r5. */
+void step_dsp_rate_tst_r5(void)
+{
+    tst8_reg(mcu.r[5]);
+    mcu.pc = 0x4ecb;
+}
+
+/* 0x4ecb BPL 4 -> 0x4ed1. */
+void step_dsp_rate_bpl_4_to_0x4ed1(void)
+{
+    mcu.pc = bpl(0x4ed1, 0x4ecd);
+}
+
+/* 0x4ecd CLR r6. */
+void step_dsp_rate_clr_r6_a(void)
+{
+    clr16_reg(mcu.r[6]);
+    mcu.pc = 0x4ecf;
+}
+
+/* 0x4ecf CLR r5. */
+void step_dsp_rate_clr_r5_a(void)
+{
+    clr8_reg(mcu.r[5]);
+    mcu.pc = 0x4ed1;
+}
+
+/* 0x4ed1 MOVG2 @r0+-2 r3. */
+void step_dsp_rate_movg2_r0_neg_2_r3(void)
+{
+    load16(mcu.r[3], ind_addr(0, -2));
+    mcu.pc = 0x4ed4;
+}
+
+/* 0x4ed4 MOVG2 @r3+0xce78 r3. */
+void step_dsp_rate_movg2_r3_0xce78_r3(void)
+{
+    load8(mcu.r[3], ind_addr(3, 52856));
+    mcu.pc = 0x4ed8;
+}
+
+/* 0x4ed8 ADD r3 r3. */
+void step_dsp_rate_add_r3_r3(void)
+{
+    add16_reg(mcu.r[3], mcu.r[3]);
+    mcu.pc = 0x4eda;
+}
+
+/* 0x4eda MOVG2 @r3+0xac4e r3. */
+void step_dsp_rate_movg2_r3_0xac4e_r3(void)
+{
+    load16(mcu.r[3], ind_addr(3, 44110));
+    mcu.pc = 0x4ede;
+}
+
+/* 0x4ede BMI 7 -> 0x4ee7. */
+void step_dsp_rate_bmi_7_to_0x4ee7(void)
+{
+    mcu.pc = bmi(0x4ee7, 0x4ee0);
+}
+
+/* 0x4ee0 ADD r3 r6. */
+void step_dsp_rate_add_r3_r6_a(void)
+{
+    add16_reg(mcu.r[6], mcu.r[3]);
+    mcu.pc = 0x4ee2;
+}
+
+/* 0x4ee2 ADDX #0x00 r5. */
+void step_dsp_rate_addx_0x00_r5_b(void)
+{
+    addx8_imm(mcu.r[5], 0x00);
+    mcu.pc = 0x4ee5;
+}
+
+/* 0x4ee5 BRA 15 -> 0x4ef6. */
+void step_dsp_rate_bra_15_to_0x4ef6(void)
+{
+    mcu.pc = 0x4ef6;
+}
+
+/* 0x4ee7 NEG r3. */
+void step_dsp_rate_neg_r3_a(void)
+{
+    neg16(mcu.r[3]);
+    mcu.pc = 0x4ee9;
+}
+
+/* 0x4ee9 SUB r3 r6. */
+void step_dsp_rate_sub_r3_r6_a(void)
+{
+    sub16_reg(mcu.r[6], mcu.r[3]);
+    mcu.pc = 0x4eeb;
+}
+
+/* 0x4eeb SUBX #0x00 r5. */
+void step_dsp_rate_subx_0x00_r5_c(void)
+{
+    subx8_imm(mcu.r[5], 0x00);
+    mcu.pc = 0x4eee;
+}
+
+/* 0x4eee TST r5. */
+void step_dsp_rate_tst_r5_a(void)
+{
+    tst8_reg(mcu.r[5]);
+    mcu.pc = 0x4ef0;
+}
+
+/* 0x4ef0 BPL 4 -> 0x4ef6. */
+void step_dsp_rate_bpl_4_to_0x4ef6(void)
+{
+    mcu.pc = bpl(0x4ef6, 0x4ef2);
+}
+
+/* 0x4ef2 CLR r6. */
+void step_dsp_rate_clr_r6_b(void)
+{
+    clr16_reg(mcu.r[6]);
+    mcu.pc = 0x4ef4;
+}
+
+/* 0x4ef4 CLR r5. */
+void step_dsp_rate_clr_r5_b(void)
+{
+    clr8_reg(mcu.r[5]);
+    mcu.pc = 0x4ef6;
+}
+
+/* 0x4ef6 MOVG3 r5 -> @r0+45. */
+void step_dsp_rate_movg3_r5_to_r0_45_b(void)
+{
+    store8(ind_addr(0, 45), mcu.r[5]);
+    mcu.pc = 0x4ef9;
+}
+
+/* 0x4ef9 MOVG3 r6 -> @r0+70. */
+void step_dsp_rate_movg3_r6_to_r0_70_b(void)
+{
+    store16(ind_addr(0, 70), mcu.r[6]);
+    mcu.pc = 0x4efc;
+}
+
+/* 0x4efc MOVG2 @r0+66 r5. */
+void step_dsp_rate_movg2_r0_66_r5(void)
+{
+    load16(mcu.r[5], ind_addr(0, 66));
+    mcu.pc = 0x4eff;
+}
+
+/* 0x4eff MOVG2 @r0+43 r4. */
+void step_dsp_rate_movg2_r0_43_r4(void)
+{
+    load8(mcu.r[4], ind_addr(0, 43));
+    mcu.pc = 0x4f02;
+}
+
+/* 0x4f02 BNE 14 -> 0x4f12. */
+void step_dsp_rate_bne_14_to_0x4f12(void)
+{
+    mcu.pc = bne(0x4f12, 0x4f04);
+}
+
+/* 0x4f04 TST r5. */
+void step_dsp_rate_tst_r5_b(void)
+{
+    tst16_reg(mcu.r[5]);
+    mcu.pc = 0x4f06;
+}
+
+/* 0x4f06 BNE 10 -> 0x4f12. */
+void step_dsp_rate_bne_10_to_0x4f12(void)
+{
+    mcu.pc = bne(0x4f12, 0x4f08);
+}
+
+/* 0x4f08 CLR r2. */
+void step_dsp_rate_clr_r2(void)
+{
+    clr16_reg(mcu.r[2]);
+    mcu.pc = 0x4f0a;
+}
+
+/* 0x4f0a MOVG2 @r0+45 r2. */
+void step_dsp_rate_movg2_r0_45_r2(void)
+{
+    load8(mcu.r[2], ind_addr(0, 45));
+    mcu.pc = 0x4f0d;
+}
+
+/* 0x4f0d MOVG2 @r0+70 r3. */
+void step_dsp_rate_movg2_r0_70_r3(void)
+{
+    load16(mcu.r[3], ind_addr(0, 70));
+    mcu.pc = 0x4f10;
+}
+
+/* 0x4f10 BRA 92 -> 0x4f6e. */
+void step_dsp_rate_bra_92_to_0x4f6e(void)
+{
+    mcu.pc = 0x4f6e;
+}
+
+/* 0x4f12 MOVG2 @r0+-2 r1. */
+void step_dsp_rate_movg2_r0_neg_2_r1(void)
+{
+    load16(mcu.r[1], ind_addr(0, -2));
+    mcu.pc = 0x4f15;
+}
+
+/* 0x4f15 CLR r3. */
+void step_dsp_rate_clr_r3_a(void)
+{
+    clr16_reg(mcu.r[3]);
+    mcu.pc = 0x4f17;
+}
+
+/* 0x4f17 MOVG2 @r0+-58 r2. */
+void step_dsp_rate_movg2_r0_neg_58_r2(void)
+{
+    load16(mcu.r[2], ind_addr(0, -58));
+    mcu.pc = 0x4f1a;
+}
+
+/* 0x4f1a MOVG2 @r2 r3. */
+void step_dsp_rate_movg2_r2_r3(void)
+{
+    load8(mcu.r[3], ind_addr(2, 0));
+    mcu.pc = 0x4f1c;
+}
+
+/* 0x4f1c ADD r3 r3. */
+void step_dsp_rate_add_r3_r3_a(void)
+{
+    add16_reg(mcu.r[3], mcu.r[3]);
+    mcu.pc = 0x4f1e;
+}
+
+/* 0x4f1e MOVG2 @r3+0x77a6 r6. */
+void step_dsp_rate_movg2_r3_0x77a6_r6(void)
+{
+    load16(mcu.r[6], ind_addr(3, 30630));
+    mcu.pc = 0x4f22;
+}
+
+/* 0x4f22 MOVG2 (dp,0xad2a) r2. */
+void step_dsp_rate_movg2_dp_0xad2a_r2_a(void)
+{
+    load16(mcu.r[2], dp_addr(0xad2a));
+    mcu.pc = 0x4f26;
+}
+
+/* 0x4f26 MULXU r6 r2:r3. */
+void step_dsp_rate_mulxu_r6_r2_r3(void)
+{
+    mulxu16_reg(mcu.r[2], mcu.r[3], mcu.r[6]);
+    mcu.pc = 0x4f28;
+}
+
+/* 0x4f28 TST r4. */
+void step_dsp_rate_tst_r4(void)
+{
+    tst8_reg(mcu.r[4]);
+    mcu.pc = 0x4f2a;
+}
+
+/* 0x4f2a BPL 30 -> 0x4f4a. */
+void step_dsp_rate_bpl_30_to_0x4f4a(void)
+{
+    mcu.pc = bpl(0x4f4a, 0x4f2c);
+}
+
+/* 0x4f2c NEG r4. */
+void step_dsp_rate_neg_r4(void)
+{
+    neg8(mcu.r[4]);
+    mcu.pc = 0x4f2e;
+}
+
+/* 0x4f2e NEG r5. */
+void step_dsp_rate_neg_r5(void)
+{
+    neg16(mcu.r[5]);
+    mcu.pc = 0x4f30;
+}
+
+/* 0x4f30 SUBX #0x00 r4. */
+void step_dsp_rate_subx_0x00_r4(void)
+{
+    subx8_imm(mcu.r[4], 0x00);
+    mcu.pc = 0x4f33;
+}
+
+/* 0x4f33 SUB r3 r5. */
+void step_dsp_rate_sub_r3_r5(void)
+{
+    sub16_reg(mcu.r[5], mcu.r[3]);
+    mcu.pc = 0x4f35;
+}
+
+/* 0x4f35 SUBX r2 r4. */
+void step_dsp_rate_subx_r2_r4(void)
+{
+    subx8_reg(mcu.r[4], mcu.r[2]);
+    mcu.pc = 0x4f37;
+}
+
+/* 0x4f37 TST r4. */
+void step_dsp_rate_tst_r4_a(void)
+{
+    tst8_reg(mcu.r[4]);
+    mcu.pc = 0x4f39;
+}
+
+/* 0x4f39 BPL 6 -> 0x4f41. */
+void step_dsp_rate_bpl_6_to_0x4f41(void)
+{
+    mcu.pc = bpl(0x4f41, 0x4f3b);
+}
+
+/* 0x4f3b CLR r4. */
+void step_dsp_rate_clr_r4(void)
+{
+    clr8_reg(mcu.r[4]);
+    mcu.pc = 0x4f3d;
+}
+
+/* 0x4f3d CLR r5. */
+void step_dsp_rate_clr_r5_c(void)
+{
+    clr16_reg(mcu.r[5]);
+    mcu.pc = 0x4f3f;
+}
+
+/* 0x4f3f BRA 21 -> 0x4f56. */
+void step_dsp_rate_bra_21_to_0x4f56(void)
+{
+    mcu.pc = 0x4f56;
+}
+
+/* 0x4f41 NEG r4. */
+void step_dsp_rate_neg_r4_a(void)
+{
+    neg8(mcu.r[4]);
+    mcu.pc = 0x4f43;
+}
+
+/* 0x4f43 NEG r5. */
+void step_dsp_rate_neg_r5_a(void)
+{
+    neg16(mcu.r[5]);
+    mcu.pc = 0x4f45;
+}
+
+/* 0x4f45 SUBX #0x00 r4. */
+void step_dsp_rate_subx_0x00_r4_a(void)
+{
+    subx8_imm(mcu.r[4], 0x00);
+    mcu.pc = 0x4f48;
+}
+
+/* 0x4f48 BRA 12 -> 0x4f56. */
+void step_dsp_rate_bra_12_to_0x4f56(void)
+{
+    mcu.pc = 0x4f56;
+}
+
+/* 0x4f4a SUB r3 r5. */
+void step_dsp_rate_sub_r3_r5_a(void)
+{
+    sub16_reg(mcu.r[5], mcu.r[3]);
+    mcu.pc = 0x4f4c;
+}
+
+/* 0x4f4c SUBX r2 r4. */
+void step_dsp_rate_subx_r2_r4_a(void)
+{
+    subx8_reg(mcu.r[4], mcu.r[2]);
+    mcu.pc = 0x4f4e;
+}
+
+/* 0x4f4e TST r4. */
+void step_dsp_rate_tst_r4_b(void)
+{
+    tst8_reg(mcu.r[4]);
+    mcu.pc = 0x4f50;
+}
+
+/* 0x4f50 BPL 4 -> 0x4f56. */
+void step_dsp_rate_bpl_4_to_0x4f56(void)
+{
+    mcu.pc = bpl(0x4f56, 0x4f52);
+}
+
+/* 0x4f52 CLR r4. */
+void step_dsp_rate_clr_r4_a(void)
+{
+    clr8_reg(mcu.r[4]);
+    mcu.pc = 0x4f54;
+}
+
+/* 0x4f54 CLR r5. */
+void step_dsp_rate_clr_r5_d(void)
+{
+    clr16_reg(mcu.r[5]);
+    mcu.pc = 0x4f56;
+}
+
+/* 0x4f56 MOVG3 r5 -> @r0+66. */
+void step_dsp_rate_movg3_r5_to_r0_66(void)
+{
+    store16(ind_addr(0, 66), mcu.r[5]);
+    mcu.pc = 0x4f59;
+}
+
+/* 0x4f59 MOVG3 r4 -> @r0+43. */
+void step_dsp_rate_movg3_r4_to_r0_43(void)
+{
+    store8(ind_addr(0, 43), mcu.r[4]);
+    mcu.pc = 0x4f5c;
+}
+
+/* 0x4f5c CLR r2. */
+void step_dsp_rate_clr_r2_a(void)
+{
+    clr16_reg(mcu.r[2]);
+    mcu.pc = 0x4f5e;
+}
+
+/* 0x4f5e MOVG2 @r0+70 r3. */
+void step_dsp_rate_movg2_r0_70_r3_a(void)
+{
+    load16(mcu.r[3], ind_addr(0, 70));
+    mcu.pc = 0x4f61;
+}
+
+/* 0x4f61 MOVG2 @r0+45 r2. */
+void step_dsp_rate_movg2_r0_45_r2_a(void)
+{
+    load8(mcu.r[2], ind_addr(0, 45));
+    mcu.pc = 0x4f64;
+}
+
+/* 0x4f64 ADD r5 r3. */
+void step_dsp_rate_add_r5_r3(void)
+{
+    add16_reg(mcu.r[3], mcu.r[5]);
+    mcu.pc = 0x4f66;
+}
+
+/* 0x4f66 ADDX r4 r2. */
+void step_dsp_rate_addx_r4_r2(void)
+{
+    addx8_reg(mcu.r[2], mcu.r[4]);
+    mcu.pc = 0x4f68;
+}
+
+/* 0x4f68 MOVG3 r2 -> @r0+45. */
+void step_dsp_rate_movg3_r2_to_r0_45(void)
+{
+    store8(ind_addr(0, 45), mcu.r[2]);
+    mcu.pc = 0x4f6b;
+}
+
+/* 0x4f6b MOVG3 r3 -> @r0+70. */
+void step_dsp_rate_movg3_r3_to_r0_70(void)
+{
+    store16(ind_addr(0, 70), mcu.r[3]);
+    mcu.pc = 0x4f6e;
+}
+
+/* 0x4f6e SUB @r0+62 r3. */
+void step_dsp_rate_sub_r0_62_r3(void)
+{
+    sub16_mem(mcu.r[3], ind_addr(0, 62));
+    mcu.pc = 0x4f71;
+}
+
+/* 0x4f71 SUBX @r0+41 r2. */
+void step_dsp_rate_subx_r0_41_r2(void)
+{
+    subx8_mem(mcu.r[2], ind_addr(0, 41));
+    mcu.pc = 0x4f74;
+}
+
+/* 0x4f74 SUB #0x2ee0 r3. */
+void step_dsp_rate_sub_0x2ee0_r3(void)
+{
+    sub16_imm(mcu.r[3], 0x2ee0);
+    mcu.pc = 0x4f78;
+}
+
+/* 0x4f78 SUBX #0x00 r2. */
+void step_dsp_rate_subx_0x00_r2(void)
+{
+    subx8_imm(mcu.r[2], 0x00);
+    mcu.pc = 0x4f7b;
+}
+
+/* 0x4f7b BPL 79 -> 0x4fcc. */
+void step_dsp_rate_bpl_79_to_0x4fcc(void)
+{
+    mcu.pc = bpl(0x4fcc, 0x4f7d);
+}
+
+/* 0x4f7d EXTS r2. */
+void step_dsp_rate_exts_r2(void)
+{
+    exts(mcu.r[2]);
+    mcu.pc = 0x4f7f;
+}
+
+/* 0x4f7f NOT r2. */
+void step_dsp_rate_not_r2(void)
+{
+    not16(mcu.r[2]);
+    mcu.pc = 0x4f81;
+}
+
+/* 0x4f81 NOT r3. */
+void step_dsp_rate_not_r3(void)
+{
+    not16(mcu.r[3]);
+    mcu.pc = 0x4f83;
+}
+
+/* 0x4f83 ADDQ #1 r3. */
+void step_dsp_rate_addq_1_r3(void)
+{
+    addq16(mcu.r[3], 1);
+    mcu.pc = 0x4f85;
+}
+
+/* 0x4f85 ADDX #0x0000 r2. */
+void step_dsp_rate_addx_0x0000_r2_a(void)
+{
+    addx16_imm(mcu.r[2], 0x0000);
+    mcu.pc = 0x4f89;
+}
+
+/* 0x4f89 DIVXU #0x2ee0 r2:r3. */
+void step_dsp_rate_divxu_0x2ee0_r2_r3(void)
+{
+    divxu16_imm(mcu.r[2], mcu.r[3], 0x2ee0);
+    mcu.pc = 0x4f8d;
+}
+
+/* 0x4f8d cmp r2,w #0x0000. */
+void step_dsp_rate_cmp_r2_w_0x0000(void)
+{
+    cmp16_imm(mcu.r[2], 0x0000);
+    mcu.pc = 0x4f90;
+}
+
+/* 0x4f90 BEQ 8 -> 0x4f9a. */
+void step_dsp_rate_beq_8_to_0x4f9a(void)
+{
+    mcu.pc = beq(0x4f9a, 0x4f92);
+}
+
+/* 0x4f92 ADDQ #1 r3. */
+void step_dsp_rate_addq_1_r3_a(void)
+{
+    addq16(mcu.r[3], 1);
+    mcu.pc = 0x4f94;
+}
+
+/* 0x4f94 NEG r2. */
+void step_dsp_rate_neg_r2_a(void)
+{
+    neg16(mcu.r[2]);
+    mcu.pc = 0x4f96;
+}
+
+/* 0x4f96 ADD #0x2ee0 r2. */
+void step_dsp_rate_add_0x2ee0_r2(void)
+{
+    add16_imm(mcu.r[2], 0x2ee0);
+    mcu.pc = 0x4f9a;
+}
+
+/* 0x4f9a CLR r1. */
+void step_dsp_rate_clr_r1(void)
+{
+    clr16_reg(mcu.r[1]);
+    mcu.pc = 0x4f9c;
+}
+
+/* 0x4f9c MOVG2 r2 r1. */
+void step_dsp_rate_movg2_r2_r1(void)
+{
+    mov_reg8(mcu.r[1], mcu.r[2]);
+    mcu.pc = 0x4f9e;
+}
+
+/* 0x4f9e ADD r1 r1. */
+void step_dsp_rate_add_r1_r1(void)
+{
+    add16_reg(mcu.r[1], mcu.r[1]);
+    mcu.pc = 0x4fa0;
+}
+
+/* 0x4fa0 MOVG2 @r1+0x78ee r4. */
+void step_dsp_rate_movg2_r1_0x78ee_r4(void)
+{
+    load16(mcu.r[4], ind_addr(1, 30958));
+    mcu.pc = 0x4fa4;
+}
+
+/* 0x4fa4 CLR r1. */
+void step_dsp_rate_clr_r1_a(void)
+{
+    clr16_reg(mcu.r[1]);
+    mcu.pc = 0x4fa6;
+}
+
+/* 0x4fa6 SWAP r2. */
+void step_dsp_rate_swap_r2(void)
+{
+    swap_reg(mcu.r[2]);
+    mcu.pc = 0x4fa8;
+}
+
+/* 0x4fa8 MOVG2 r2 r1. */
+void step_dsp_rate_movg2_r2_r1_a(void)
+{
+    mov_reg8(mcu.r[1], mcu.r[2]);
+    mcu.pc = 0x4faa;
+}
+
+/* 0x4faa ADD r1 r1. */
+void step_dsp_rate_add_r1_r1_a(void)
+{
+    add16_reg(mcu.r[1], mcu.r[1]);
+    mcu.pc = 0x4fac;
+}
+
+/* 0x4fac MOVG2 @r1+0x7aee r1. */
+void step_dsp_rate_movg2_r1_0x7aee_r1(void)
+{
+    load16(mcu.r[1], ind_addr(1, 31470));
+    mcu.pc = 0x4fb0;
+}
+
+/* 0x4fb0 MULXU r1 r4:r5. */
+void step_dsp_rate_mulxu_r1_r4_r5(void)
+{
+    mulxu16_reg(mcu.r[4], mcu.r[5], mcu.r[1]);
+    mcu.pc = 0x4fb2;
+}
+
+/* 0x4fb2 ROTL r4. */
+void step_dsp_rate_rotl_r4(void)
+{
+    rotl(mcu.r[4]);
+    mcu.pc = 0x4fb4;
+}
+
+/* 0x4fb4 ROTL r4. */
+void step_dsp_rate_rotl_r4_a(void)
+{
+    rotl(mcu.r[4]);
+    mcu.pc = 0x4fb6;
+}
+
+/* 0x4fb6 AND #0x03 r4. */
+void step_dsp_rate_and_0x03_r4(void)
+{
+    and8_imm(mcu.r[4], 0x03);
+    mcu.pc = 0x4fb9;
+}
+
+/* 0x4fb9 SWAP r4. */
+void step_dsp_rate_swap_r4(void)
+{
+    swap_reg(mcu.r[4]);
+    mcu.pc = 0x4fbb;
+}
+
+/* 0x4fbb ADD r1 r4. */
+void step_dsp_rate_add_r1_r4(void)
+{
+    add16_reg(mcu.r[4], mcu.r[1]);
+    mcu.pc = 0x4fbd;
+}
+
+/* 0x4fbd TST r3. */
+void step_dsp_rate_tst_r3(void)
+{
+    tst16_reg(mcu.r[3]);
+    mcu.pc = 0x4fbf;
+}
+
+/* 0x4fbf BEQ 62 -> 0x4fff. */
+void step_dsp_rate_beq_62_to_0x4fff(void)
+{
+    mcu.pc = beq(0x4fff, 0x4fc1);
+}
+
+/* 0x4fc1 SUB #0x0001 r3. */
+void step_dsp_rate_sub_0x0001_r3(void)
+{
+    sub16_imm(mcu.r[3], 0x0001);
+    mcu.pc = 0x4fc5;
+}
+
+/* 0x4fc5 SHLR r4. */
+void step_dsp_rate_shlr_r4(void)
+{
+    shlr(mcu.r[4]);
+    mcu.pc = 0x4fc7;
+}
+
+/* 0x4fc7 cntjmp r3 -5 -> 0x4fc5. */
+void step_dsp_rate_cntjmp_r3_5_to_0x4fc5(void)
+{
+    mcu.r[3] = (uint16_t)(mcu.r[3] - 1);
+    mcu.pc = (mcu.r[3] != 0xffff) ? 0x4fc5 : 0x4fca;
+}
+
+/* 0x4fca BRA 51 -> 0x4fff. */
+void step_dsp_rate_bra_51_to_0x4fff(void)
+{
+    mcu.pc = 0x4fff;
+}
+
+/* 0x4fcc EXTS r2. */
+void step_dsp_rate_exts_r2_a(void)
+{
+    exts(mcu.r[2]);
+    mcu.pc = 0x4fce;
+}
+
+/* 0x4fce DIVXU #0x2ee0 r2:r3. */
+void step_dsp_rate_divxu_0x2ee0_r2_r3_a(void)
+{
+    divxu16_imm(mcu.r[2], mcu.r[3], 0x2ee0);
+    mcu.pc = 0x4fd2;
+}
+
+/* 0x4fd2 TST r3. */
+void step_dsp_rate_tst_r3_a(void)
+{
+    tst16_reg(mcu.r[3]);
+    mcu.pc = 0x4fd4;
+}
+
+/* 0x4fd4 BEQ 6 -> 0x4fdc. */
+void step_dsp_rate_beq_6_to_0x4fdc(void)
+{
+    mcu.pc = beq(0x4fdc, 0x4fd6);
+}
+
+/* 0x4fd6 MOVG2 #0xffff r4. */
+void step_dsp_rate_movg2_0xffff_r4(void)
+{
+    load_imm16(mcu.r[4], 0xffff);
+    mcu.pc = 0x4fda;
+}
+
+/* 0x4fda BRA 35 -> 0x4fff. */
+void step_dsp_rate_bra_35_to_0x4fff(void)
+{
+    mcu.pc = 0x4fff;
+}
+
+/* 0x4fdc CLR r1. */
+void step_dsp_rate_clr_r1_b(void)
+{
+    clr16_reg(mcu.r[1]);
+    mcu.pc = 0x4fde;
+}
+
+/* 0x4fde MOVG2 r2 r1. */
+void step_dsp_rate_movg2_r2_r1_b(void)
+{
+    mov_reg8(mcu.r[1], mcu.r[2]);
+    mcu.pc = 0x4fe0;
+}
+
+/* 0x4fe0 ADD r1 r1. */
+void step_dsp_rate_add_r1_r1_b(void)
+{
+    add16_reg(mcu.r[1], mcu.r[1]);
+    mcu.pc = 0x4fe2;
+}
+
+/* 0x4fe2 MOVG2 @r1+0x78ee r4. */
+void step_dsp_rate_movg2_r1_0x78ee_r4_a(void)
+{
+    load16(mcu.r[4], ind_addr(1, 30958));
+    mcu.pc = 0x4fe6;
+}
+
+/* 0x4fe6 CLR r1. */
+void step_dsp_rate_clr_r1_c(void)
+{
+    clr16_reg(mcu.r[1]);
+    mcu.pc = 0x4fe8;
+}
+
+/* 0x4fe8 SWAP r2. */
+void step_dsp_rate_swap_r2_a(void)
+{
+    swap_reg(mcu.r[2]);
+    mcu.pc = 0x4fea;
+}
+
+/* 0x4fea MOVG2 r2 r1. */
+void step_dsp_rate_movg2_r2_r1_c(void)
+{
+    mov_reg8(mcu.r[1], mcu.r[2]);
+    mcu.pc = 0x4fec;
+}
+
+/* 0x4fec ADD r1 r1. */
+void step_dsp_rate_add_r1_r1_c(void)
+{
+    add16_reg(mcu.r[1], mcu.r[1]);
+    mcu.pc = 0x4fee;
+}
+
+/* 0x4fee MOVG2 @r1+0x7aee r1. */
+void step_dsp_rate_movg2_r1_0x7aee_r1_a(void)
+{
+    load16(mcu.r[1], ind_addr(1, 31470));
+    mcu.pc = 0x4ff2;
+}
+
+/* 0x4ff2 MULXU r1 r4:r5. */
+void step_dsp_rate_mulxu_r1_r4_r5_a(void)
+{
+    mulxu16_reg(mcu.r[4], mcu.r[5], mcu.r[1]);
+    mcu.pc = 0x4ff4;
+}
+
+/* 0x4ff4 ROTL r4. */
+void step_dsp_rate_rotl_r4_b(void)
+{
+    rotl(mcu.r[4]);
+    mcu.pc = 0x4ff6;
+}
+
+/* 0x4ff6 ROTL r4. */
+void step_dsp_rate_rotl_r4_c(void)
+{
+    rotl(mcu.r[4]);
+    mcu.pc = 0x4ff8;
+}
+
+/* 0x4ff8 AND #0x03 r4. */
+void step_dsp_rate_and_0x03_r4_a(void)
+{
+    and8_imm(mcu.r[4], 0x03);
+    mcu.pc = 0x4ffb;
+}
+
+/* 0x4ffb SWAP r4. */
+void step_dsp_rate_swap_r4_a(void)
+{
+    swap_reg(mcu.r[4]);
+    mcu.pc = 0x4ffd;
+}
+
+/* 0x4ffd ADD r1 r4. */
+void step_dsp_rate_add_r1_r4_a(void)
+{
+    add16_reg(mcu.r[4], mcu.r[1]);
+    mcu.pc = 0x4fff;
+}
+
+/* 0x4fff MOVG3 r4 -> (dp,0xce3c). */
+void step_dsp_rate_movg3_r4_to_dp_0xce3c(void)
+{
+    store16(dp_addr(0xce3c), mcu.r[4]);
+    mcu.pc = 0x5003;
+}
+
+/* 0x5003 MOVG2 @r0+46 r1. */
+void step_dsp_rate_movg2_r0_46_r1(void)
+{
+    load16(mcu.r[1], ind_addr(0, 46));
+    mcu.pc = 0x5006;
+}
+
+/* 0x5006 CLR r2. */
+void step_dsp_rate_clr_r2_b(void)
+{
+    clr16_reg(mcu.r[2]);
+    mcu.pc = 0x5008;
+}
+
+/* 0x5008 MOVG2 @r1+7 r2. */
+void step_dsp_rate_movg2_r1_7_r2(void)
+{
+    load8(mcu.r[2], ind_addr(1, 7));
+    mcu.pc = 0x500b;
+}
+
+/* 0x500b CMP @r0+0x00a4 r2. */
+void step_dsp_rate_cmp_r0_0x00a4_r2(void)
+{
+    cmp8_mem(mcu.r[2], ind_addr(0, 164));
+    mcu.pc = 0x500f;
+}
+
+/* 0x500f BEQ 0x00c0 -> 0x50d2. */
+void step_dsp_rate_beq_0x00c0_to_0x50d2(void)
+{
+    mcu.pc = beq(0x50d2, 0x5012);
+}
+
+/* 0x5012 MOVG3 r2 -> @r0+0x00a4. */
+void step_dsp_rate_movg3_r2_to_r0_0x00a4(void)
+{
+    store8(ind_addr(0, 164), mcu.r[2]);
+    mcu.pc = 0x5016;
+}
+
+/* 0x5016 MOVG2 @r0+62 r3. */
+void step_dsp_rate_movg2_r0_62_r3(void)
+{
+    load16(mcu.r[3], ind_addr(0, 62));
+    mcu.pc = 0x5019;
+}
+
+/* 0x5019 MOVG2 @r0+41 r2. */
+void step_dsp_rate_movg2_r0_41_r2(void)
+{
+    load8(mcu.r[2], ind_addr(0, 41));
+    mcu.pc = 0x501c;
+}
+
+/* 0x501c SUB #0x3c68 r3. */
+void step_dsp_rate_sub_0x3c68_r3(void)
+{
+    sub16_imm(mcu.r[3], 0x3c68);
+    mcu.pc = 0x5020;
+}
+
+/* 0x5020 SUBX #0x01 r2. */
+void step_dsp_rate_subx_0x01_r2(void)
+{
+    subx8_imm(mcu.r[2], 0x01);
+    mcu.pc = 0x5023;
+}
+
+/* 0x5023 BPL 85 -> 0x507a. */
+void step_dsp_rate_bpl_85_to_0x507a(void)
+{
+    mcu.pc = bpl(0x507a, 0x5025);
+}
+
+/* 0x5025 EXTS r2. */
+void step_dsp_rate_exts_r2_b(void)
+{
+    exts(mcu.r[2]);
+    mcu.pc = 0x5027;
+}
+
+/* 0x5027 NOT r2. */
+void step_dsp_rate_not_r2_a(void)
+{
+    not16(mcu.r[2]);
+    mcu.pc = 0x5029;
+}
+
+/* 0x5029 NOT r3. */
+void step_dsp_rate_not_r3_a(void)
+{
+    not16(mcu.r[3]);
+    mcu.pc = 0x502b;
+}
+
+/* 0x502b ADDQ #1 r3. */
+void step_dsp_rate_addq_1_r3_b(void)
+{
+    addq16(mcu.r[3], 1);
+    mcu.pc = 0x502d;
+}
+
+/* 0x502d ADDX #0x0000 r2. */
+void step_dsp_rate_addx_0x0000_r2_b(void)
+{
+    addx16_imm(mcu.r[2], 0x0000);
+    mcu.pc = 0x5031;
+}
+
+/* 0x5031 DIVXU #0x2ee0 r2:r3. */
+void step_dsp_rate_divxu_0x2ee0_r2_r3_b(void)
+{
+    divxu16_imm(mcu.r[2], mcu.r[3], 0x2ee0);
+    mcu.pc = 0x5035;
+}
+
+/* 0x5035 TST r2. */
+void step_dsp_rate_tst_r2_a(void)
+{
+    tst16_reg(mcu.r[2]);
+    mcu.pc = 0x5037;
+}
+
+/* 0x5037 BEQ 8 -> 0x5041. */
+void step_dsp_rate_beq_8_to_0x5041(void)
+{
+    mcu.pc = beq(0x5041, 0x5039);
+}
+
+/* 0x5039 ADDQ #1 r3. */
+void step_dsp_rate_addq_1_r3_c(void)
+{
+    addq16(mcu.r[3], 1);
+    mcu.pc = 0x503b;
+}
+
+/* 0x503b NEG r2. */
+void step_dsp_rate_neg_r2_b(void)
+{
+    neg16(mcu.r[2]);
+    mcu.pc = 0x503d;
+}
+
+/* 0x503d ADD #0x2ee0 r2. */
+void step_dsp_rate_add_0x2ee0_r2_a(void)
+{
+    add16_imm(mcu.r[2], 0x2ee0);
+    mcu.pc = 0x5041;
+}
+
+/* 0x5041 CLR r1. */
+void step_dsp_rate_clr_r1_d(void)
+{
+    clr16_reg(mcu.r[1]);
+    mcu.pc = 0x5043;
+}
+
+/* 0x5043 MOVG2 r2 r1. */
+void step_dsp_rate_movg2_r2_r1_d(void)
+{
+    mov_reg8(mcu.r[1], mcu.r[2]);
+    mcu.pc = 0x5045;
+}
+
+/* 0x5045 ADD r1 r1. */
+void step_dsp_rate_add_r1_r1_d(void)
+{
+    add16_reg(mcu.r[1], mcu.r[1]);
+    mcu.pc = 0x5047;
+}
+
+/* 0x5047 MOVG2 @r1+0x78ee r4. */
+void step_dsp_rate_movg2_r1_0x78ee_r4_b(void)
+{
+    load16(mcu.r[4], ind_addr(1, 30958));
+    mcu.pc = 0x504b;
+}
+
+/* 0x504b CLR r1. */
+void step_dsp_rate_clr_r1_e(void)
+{
+    clr16_reg(mcu.r[1]);
+    mcu.pc = 0x504d;
+}
+
+/* 0x504d SWAP r2. */
+void step_dsp_rate_swap_r2_b(void)
+{
+    swap_reg(mcu.r[2]);
+    mcu.pc = 0x504f;
+}
+
+/* 0x504f MOVG2 r2 r1. */
+void step_dsp_rate_movg2_r2_r1_e(void)
+{
+    mov_reg8(mcu.r[1], mcu.r[2]);
+    mcu.pc = 0x5051;
+}
+
+/* 0x5051 ADD r1 r1. */
+void step_dsp_rate_add_r1_r1_e(void)
+{
+    add16_reg(mcu.r[1], mcu.r[1]);
+    mcu.pc = 0x5053;
+}
+
+/* 0x5053 MOVG2 @r1+0x7aee r1. */
+void step_dsp_rate_movg2_r1_0x7aee_r1_b(void)
+{
+    load16(mcu.r[1], ind_addr(1, 31470));
+    mcu.pc = 0x5057;
+}
+
+/* 0x5057 MULXU r1 r4:r5. */
+void step_dsp_rate_mulxu_r1_r4_r5_b(void)
+{
+    mulxu16_reg(mcu.r[4], mcu.r[5], mcu.r[1]);
+    mcu.pc = 0x5059;
+}
+
+/* 0x5059 ROTL r4. */
+void step_dsp_rate_rotl_r4_d(void)
+{
+    rotl(mcu.r[4]);
+    mcu.pc = 0x505b;
+}
+
+/* 0x505b ROTL r4. */
+void step_dsp_rate_rotl_r4_e(void)
+{
+    rotl(mcu.r[4]);
+    mcu.pc = 0x505d;
+}
+
+/* 0x505d AND #0x03 r4. */
+void step_dsp_rate_and_0x03_r4_b(void)
+{
+    and8_imm(mcu.r[4], 0x03);
+    mcu.pc = 0x5060;
+}
+
+/* 0x5060 SWAP r4. */
+void step_dsp_rate_swap_r4_b(void)
+{
+    swap_reg(mcu.r[4]);
+    mcu.pc = 0x5062;
+}
+
+/* 0x5062 ADD r1 r4. */
+void step_dsp_rate_add_r1_r4_b(void)
+{
+    add16_reg(mcu.r[4], mcu.r[1]);
+    mcu.pc = 0x5064;
+}
+
+/* 0x5064 TST r3. */
+void step_dsp_rate_tst_r3_b(void)
+{
+    tst16_reg(mcu.r[3]);
+    mcu.pc = 0x5066;
+}
+
+/* 0x5066 BEQ 69 -> 0x50ad. */
+void step_dsp_rate_beq_69_to_0x50ad(void)
+{
+    mcu.pc = beq(0x50ad, 0x5068);
+}
+
+/* 0x5068 SUB #0x0001 r3. */
+void step_dsp_rate_sub_0x0001_r3_a(void)
+{
+    sub16_imm(mcu.r[3], 0x0001);
+    mcu.pc = 0x506c;
+}
+
+/* 0x506c SHLR r4. */
+void step_dsp_rate_shlr_r4_a(void)
+{
+    shlr(mcu.r[4]);
+    mcu.pc = 0x506e;
+}
+
+/* 0x506e cntjmp r3 -5 -> 0x506c. */
+void step_dsp_rate_cntjmp_r3_5_to_0x506c(void)
+{
+    mcu.r[3] = (uint16_t)(mcu.r[3] - 1);
+    mcu.pc = (mcu.r[3] != 0xffff) ? 0x506c : 0x5071;
+}
+
+/* 0x5071 TST r4. */
+void step_dsp_rate_tst_r4_c(void)
+{
+    tst16_reg(mcu.r[4]);
+    mcu.pc = 0x5073;
+}
+
+/* 0x5073 BNE 56 -> 0x50ad. */
+void step_dsp_rate_bne_56_to_0x50ad(void)
+{
+    mcu.pc = bne(0x50ad, 0x5075);
+}
+
+/* 0x5075 movi r4 #0x0001. */
+void step_dsp_rate_movi_r4_0x0001(void)
+{
+    movi16(mcu.r[4], 0x0001);
+    mcu.pc = 0x5078;
+}
+
+/* 0x5078 BRA 51 -> 0x50ad. */
+void step_dsp_rate_bra_51_to_0x50ad(void)
+{
+    mcu.pc = 0x50ad;
+}
+
+/* 0x507a EXTS r2. */
+void step_dsp_rate_exts_r2_c(void)
+{
+    exts(mcu.r[2]);
+    mcu.pc = 0x507c;
+}
+
+/* 0x507c DIVXU #0x2ee0 r2:r3. */
+void step_dsp_rate_divxu_0x2ee0_r2_r3_c(void)
+{
+    divxu16_imm(mcu.r[2], mcu.r[3], 0x2ee0);
+    mcu.pc = 0x5080;
+}
+
+/* 0x5080 TST r3. */
+void step_dsp_rate_tst_r3_c(void)
+{
+    tst16_reg(mcu.r[3]);
+    mcu.pc = 0x5082;
+}
+
+/* 0x5082 BEQ 6 -> 0x508a. */
+void step_dsp_rate_beq_6_to_0x508a(void)
+{
+    mcu.pc = beq(0x508a, 0x5084);
+}
+
+/* 0x5084 MOVG2 #0xffff r4. */
+void step_dsp_rate_movg2_0xffff_r4_a(void)
+{
+    load_imm16(mcu.r[4], 0xffff);
+    mcu.pc = 0x5088;
+}
+
+/* 0x5088 BRA 35 -> 0x50ad. */
+void step_dsp_rate_bra_35_to_0x50ad(void)
+{
+    mcu.pc = 0x50ad;
+}
+
+/* 0x508a CLR r1. */
+void step_dsp_rate_clr_r1_f(void)
+{
+    clr16_reg(mcu.r[1]);
+    mcu.pc = 0x508c;
+}
+
+/* 0x508c MOVG2 r2 r1. */
+void step_dsp_rate_movg2_r2_r1_f(void)
+{
+    mov_reg8(mcu.r[1], mcu.r[2]);
+    mcu.pc = 0x508e;
+}
+
+/* 0x508e ADD r1 r1. */
+void step_dsp_rate_add_r1_r1_f(void)
+{
+    add16_reg(mcu.r[1], mcu.r[1]);
+    mcu.pc = 0x5090;
+}
+
+/* 0x5090 MOVG2 @r1+0x78ee r4. */
+void step_dsp_rate_movg2_r1_0x78ee_r4_c(void)
+{
+    load16(mcu.r[4], ind_addr(1, 30958));
+    mcu.pc = 0x5094;
+}
+
+/* 0x5094 CLR r1. */
+void step_dsp_rate_clr_r1_g(void)
+{
+    clr16_reg(mcu.r[1]);
+    mcu.pc = 0x5096;
+}
+
+/* 0x5096 SWAP r2. */
+void step_dsp_rate_swap_r2_c(void)
+{
+    swap_reg(mcu.r[2]);
+    mcu.pc = 0x5098;
+}
+
+/* 0x5098 MOVG2 r2 r1. */
+void step_dsp_rate_movg2_r2_r1_g(void)
+{
+    mov_reg8(mcu.r[1], mcu.r[2]);
+    mcu.pc = 0x509a;
+}
+
+/* 0x509a ADD r1 r1. */
+void step_dsp_rate_add_r1_r1_g(void)
+{
+    add16_reg(mcu.r[1], mcu.r[1]);
+    mcu.pc = 0x509c;
+}
+
+/* 0x509c MOVG2 @r1+0x7aee r1. */
+void step_dsp_rate_movg2_r1_0x7aee_r1_c(void)
+{
+    load16(mcu.r[1], ind_addr(1, 31470));
+    mcu.pc = 0x50a0;
+}
+
+/* 0x50a0 MULXU r1 r4:r5. */
+void step_dsp_rate_mulxu_r1_r4_r5_c(void)
+{
+    mulxu16_reg(mcu.r[4], mcu.r[5], mcu.r[1]);
+    mcu.pc = 0x50a2;
+}
+
+/* 0x50a2 ROTL r4. */
+void step_dsp_rate_rotl_r4_f(void)
+{
+    rotl(mcu.r[4]);
+    mcu.pc = 0x50a4;
+}
+
+/* 0x50a4 ROTL r4. */
+void step_dsp_rate_rotl_r4_g(void)
+{
+    rotl(mcu.r[4]);
+    mcu.pc = 0x50a6;
+}
+
+/* 0x50a6 AND #0x03 r4. */
+void step_dsp_rate_and_0x03_r4_c(void)
+{
+    and8_imm(mcu.r[4], 0x03);
+    mcu.pc = 0x50a9;
+}
+
+/* 0x50a9 SWAP r4. */
+void step_dsp_rate_swap_r4_c(void)
+{
+    swap_reg(mcu.r[4]);
+    mcu.pc = 0x50ab;
+}
+
+/* 0x50ab ADD r1 r4. */
+void step_dsp_rate_add_r1_r4_c(void)
+{
+    add16_reg(mcu.r[4], mcu.r[1]);
+    mcu.pc = 0x50ad;
+}
+
+/* 0x50ad CLR r3. */
+void step_dsp_rate_clr_r3_b(void)
+{
+    clr16_reg(mcu.r[3]);
+    mcu.pc = 0x50af;
+}
+
+/* 0x50af CLR r2. */
+void step_dsp_rate_clr_r2_c(void)
+{
+    clr16_reg(mcu.r[2]);
+    mcu.pc = 0x50b1;
+}
+
+/* 0x50b1 MOVG2 @r0+0x00a4 r2. */
+void step_dsp_rate_movg2_r0_0x00a4_r2(void)
+{
+    load8(mcu.r[2], ind_addr(0, 164));
+    mcu.pc = 0x50b5;
+}
+
+/* 0x50b5 SUB #0x80 r2. */
+void step_dsp_rate_sub_0x80_r2(void)
+{
+    sub8_imm(mcu.r[2], 0x80);
+    mcu.pc = 0x50b8;
+}
+
+/* 0x50b8 BMI 9 -> 0x50c3. */
+void step_dsp_rate_bmi_9_to_0x50c3(void)
+{
+    mcu.pc = bmi(0x50c3, 0x50ba);
+}
+
+/* 0x50ba DIVXU r4 r2:r3. */
+void step_dsp_rate_divxu_r4_r2_r3(void)
+{
+    divxu16_reg(mcu.r[2], mcu.r[3], mcu.r[4]);
+    mcu.pc = 0x50bc;
+}
+
+/* 0x50bc BGE 16 -> 0x50ce. */
+void step_dsp_rate_bge_16_to_0x50ce(void)
+{
+    mcu.pc = bge(0x50ce, 0x50be);
+}
+
+/* 0x50be movi r3 #0x7fff. */
+void step_dsp_rate_movi_r3_0x7fff(void)
+{
+    movi16(mcu.r[3], 0x7fff);
+    mcu.pc = 0x50c1;
+}
+
+/* 0x50c1 BRA 11 -> 0x50ce. */
+void step_dsp_rate_bra_11_to_0x50ce(void)
+{
+    mcu.pc = 0x50ce;
+}
+
+/* 0x50c3 NEG r2. */
+void step_dsp_rate_neg_r2_c(void)
+{
+    neg8(mcu.r[2]);
+    mcu.pc = 0x50c5;
+}
+
+/* 0x50c5 DIVXU r4 r2:r3. */
+void step_dsp_rate_divxu_r4_r2_r3_a(void)
+{
+    divxu16_reg(mcu.r[2], mcu.r[3], mcu.r[4]);
+    mcu.pc = 0x50c7;
+}
+
+/* 0x50c7 BGE 3 -> 0x50cc. */
+void step_dsp_rate_bge_3_to_0x50cc(void)
+{
+    mcu.pc = bge(0x50cc, 0x50c9);
+}
+
+/* 0x50c9 movi r3 #0x7fff. */
+void step_dsp_rate_movi_r3_0x7fff_a(void)
+{
+    movi16(mcu.r[3], 0x7fff);
+    mcu.pc = 0x50cc;
+}
+
+/* 0x50cc NEG r3. */
+void step_dsp_rate_neg_r3_b(void)
+{
+    neg16(mcu.r[3]);
+    mcu.pc = 0x50ce;
+}
+
+/* 0x50ce MOVG3 r3 -> @r0+0x00a6. */
+void step_dsp_rate_movg3_r3_to_r0_0x00a6(void)
+{
+    store16(ind_addr(0, 166), mcu.r[3]);
+    mcu.pc = 0x50d2;
+}
+
+/* 0x50d2 MOVG2 @r0+0x00a6 r4. */
+void step_dsp_rate_movg2_r0_0x00a6_r4(void)
+{
+    load16(mcu.r[4], ind_addr(0, 166));
+    mcu.pc = 0x50d6;
+}
+
+/* 0x50d6 BMI 11 -> 0x50e3. */
+void step_dsp_rate_bmi_11_to_0x50e3(void)
+{
+    mcu.pc = bmi(0x50e3, 0x50d8);
+}
+
+/* 0x50d8 ADD (dp,0xce3c) r4. */
+void step_dsp_rate_add_dp_0xce3c_r4(void)
+{
+    add16_mem(mcu.r[4], dp_addr(0xce3c));
+    mcu.pc = 0x50dc;
+}
+
+/* 0x50dc BCC 13 -> 0x50eb. */
+void step_dsp_rate_bcc_13_to_0x50eb(void)
+{
+    mcu.pc = bcc(0x50eb, 0x50de);
+}
+
+/* 0x50de movi r4 #0xffff. */
+void step_dsp_rate_movi_r4_0xffff(void)
+{
+    movi16(mcu.r[4], 0xffff);
+    mcu.pc = 0x50e1;
+}
+
+/* 0x50e1 BRA 8 -> 0x50eb. */
+void step_dsp_rate_bra_8_to_0x50eb(void)
+{
+    mcu.pc = 0x50eb;
+}
+
+/* 0x50e3 ADD (dp,0xce3c) r4. */
+void step_dsp_rate_add_dp_0xce3c_r4_a(void)
+{
+    add16_mem(mcu.r[4], dp_addr(0xce3c));
+    mcu.pc = 0x50e7;
+}
+
+/* 0x50e7 BCS 2 -> 0x50eb. */
+void step_dsp_rate_bcs_2_to_0x50eb(void)
+{
+    mcu.pc = bcs(0x50eb, 0x50e9);
+}
+
+/* 0x50e9 CLR r4. */
+void step_dsp_rate_clr_r4_b(void)
+{
+    clr16_reg(mcu.r[4]);
+    mcu.pc = 0x50eb;
+}
+
+/* 0x50eb MOVG3 r4 -> @r0+72. */
+void step_dsp_rate_movg3_r4_to_r0_72(void)
+{
+    store16(ind_addr(0, 72), mcu.r[4]);
+    mcu.pc = 0x50ee;
+}
+
+/* 0x50ee rts. */
+void step_dsp_rate_rts(void)
+{
+    mcu.pc = MCU_PopStack();
+}
 
 void dsp_rate_fill(void)
 {
-    for (uint32_t i = 0; i < sizeof(kDspRatePcs) / sizeof(kDspRatePcs[0]); i++)
-        MK2CPP_HandRegisterRoutine(kDspRatePcs[i], &step_dsp_rate);
+    MK2CPP_HandRegister(0x00004de7u, &step_dsp_rate_movg2_dp_0xad2a_r2);
+    MK2CPP_HandRegister(0x00004debu, &step_dsp_rate_add_r0_22_r2);
+    MK2CPP_HandRegister(0x00004deeu, &step_dsp_rate_clr_r0_22);
+    MK2CPP_HandRegister(0x00004df1u, &step_dsp_rate_mulxu_r0_124_r2_r3);
+    MK2CPP_HandRegister(0x00004df4u, &step_dsp_rate_add_r0_12_r3);
+    MK2CPP_HandRegister(0x00004df7u, &step_dsp_rate_addx_0x0000_r2);
+    MK2CPP_HandRegister(0x00004dfbu, &step_dsp_rate_tst_r2);
+    MK2CPP_HandRegister(0x00004dfdu, &step_dsp_rate_beq_17_to_0x4e10);
+    MK2CPP_HandRegister(0x00004dffu, &step_dsp_rate_sub_0xffff_r3);
+    MK2CPP_HandRegister(0x00004e03u, &step_dsp_rate_subx_0x0000_r2);
+    MK2CPP_HandRegister(0x00004e07u, &step_dsp_rate_divxu_r0_124_r2_r3);
+    MK2CPP_HandRegister(0x00004e0au, &step_dsp_rate_movg3_r3_to_r0_22);
+    MK2CPP_HandRegister(0x00004e0du, &step_dsp_rate_movi_r3_0xffff);
+    MK2CPP_HandRegister(0x00004e10u, &step_dsp_rate_movg3_r3_to_r0_12);
+    MK2CPP_HandRegister(0x00004e13u, &step_dsp_rate_sub_r0_neg_3_0x00);
+    MK2CPP_HandRegister(0x00004e17u, &step_dsp_rate_bne_30_to_0x4e37);
+    MK2CPP_HandRegister(0x00004e19u, &step_dsp_rate_movg2_r0_114_r4);
+    MK2CPP_HandRegister(0x00004e1cu, &step_dsp_rate_sub_r0_112_r4);
+    MK2CPP_HandRegister(0x00004e1fu, &step_dsp_rate_mulxu_r3_r4_r5);
+    MK2CPP_HandRegister(0x00004e21u, &step_dsp_rate_clr_r3);
+    MK2CPP_HandRegister(0x00004e23u, &step_dsp_rate_add_r0_112_r4);
+    MK2CPP_HandRegister(0x00004e26u, &step_dsp_rate_addx_r0_106_r3);
+    MK2CPP_HandRegister(0x00004e29u, &step_dsp_rate_movg3_r3_to_r0_44);
+    MK2CPP_HandRegister(0x00004e2cu, &step_dsp_rate_movg3_r4_to_r0_68);
+    MK2CPP_HandRegister(0x00004e2fu, &step_dsp_rate_movg3_r3_to_r0_45);
+    MK2CPP_HandRegister(0x00004e32u, &step_dsp_rate_movg3_r4_to_r0_70);
+    MK2CPP_HandRegister(0x00004e35u, &step_dsp_rate_bra_31_to_0x4e56);
+    MK2CPP_HandRegister(0x00004e37u, &step_dsp_rate_movg2_r0_112_r4);
+    MK2CPP_HandRegister(0x00004e3au, &step_dsp_rate_sub_r0_114_r4);
+    MK2CPP_HandRegister(0x00004e3du, &step_dsp_rate_mulxu_r3_r4_r5_a);
+    MK2CPP_HandRegister(0x00004e3fu, &step_dsp_rate_movg2_r0_112_r6);
+    MK2CPP_HandRegister(0x00004e42u, &step_dsp_rate_movg2_r0_106_r5);
+    MK2CPP_HandRegister(0x00004e45u, &step_dsp_rate_sub_r4_r6);
+    MK2CPP_HandRegister(0x00004e47u, &step_dsp_rate_subx_0x00_r5);
+    MK2CPP_HandRegister(0x00004e4au, &step_dsp_rate_movg3_r5_to_r0_44);
+    MK2CPP_HandRegister(0x00004e4du, &step_dsp_rate_movg3_r6_to_r0_68);
+    MK2CPP_HandRegister(0x00004e50u, &step_dsp_rate_movg3_r5_to_r0_45);
+    MK2CPP_HandRegister(0x00004e53u, &step_dsp_rate_movg3_r6_to_r0_70);
+    MK2CPP_HandRegister(0x00004e56u, &step_dsp_rate_movg2_r0_45_r5);
+    MK2CPP_HandRegister(0x00004e59u, &step_dsp_rate_movg2_r0_70_r6);
+    MK2CPP_HandRegister(0x00004e5cu, &step_dsp_rate_movg2_r0_0x0086_r2);
+    MK2CPP_HandRegister(0x00004e60u, &step_dsp_rate_bpl_15_to_0x4e71);
+    MK2CPP_HandRegister(0x00004e62u, &step_dsp_rate_neg_r2);
+    MK2CPP_HandRegister(0x00004e64u, &step_dsp_rate_sub_r2_r6);
+    MK2CPP_HandRegister(0x00004e66u, &step_dsp_rate_subx_0x00_r5_a);
+    MK2CPP_HandRegister(0x00004e69u, &step_dsp_rate_bcc_32_to_0x4e8b);
+    MK2CPP_HandRegister(0x00004e6bu, &step_dsp_rate_clr_r6);
+    MK2CPP_HandRegister(0x00004e6du, &step_dsp_rate_clr_r5);
+    MK2CPP_HandRegister(0x00004e6fu, &step_dsp_rate_bra_26_to_0x4e8b);
+    MK2CPP_HandRegister(0x00004e71u, &step_dsp_rate_add_r2_r6);
+    MK2CPP_HandRegister(0x00004e73u, &step_dsp_rate_addx_0x00_r5);
+    MK2CPP_HandRegister(0x00004e76u, &step_dsp_rate_cmp_r5_b_0x01);
+    MK2CPP_HandRegister(0x00004e78u, &step_dsp_rate_beq_9_to_0x4e83);
+    MK2CPP_HandRegister(0x00004e7au, &step_dsp_rate_bcs_15_to_0x4e8b);
+    MK2CPP_HandRegister(0x00004e7cu, &step_dsp_rate_movi_r6_0xf018);
+    MK2CPP_HandRegister(0x00004e7fu, &step_dsp_rate_move_r5_0x01);
+    MK2CPP_HandRegister(0x00004e81u, &step_dsp_rate_bra_8_to_0x4e8b);
+    MK2CPP_HandRegister(0x00004e83u, &step_dsp_rate_cmp_r6_w_0xf018);
+    MK2CPP_HandRegister(0x00004e86u, &step_dsp_rate_bls_3_to_0x4e8b);
+    MK2CPP_HandRegister(0x00004e88u, &step_dsp_rate_movi_r6_0xf018_a);
+    MK2CPP_HandRegister(0x00004e8bu, &step_dsp_rate_movg3_r5_to_r0_45_a);
+    MK2CPP_HandRegister(0x00004e8eu, &step_dsp_rate_movg3_r6_to_r0_70_a);
+    MK2CPP_HandRegister(0x00004e91u, &step_dsp_rate_movg2_r0_neg_118_r2);
+    MK2CPP_HandRegister(0x00004e94u, &step_dsp_rate_movg2_r0_0x0090_r3);
+    MK2CPP_HandRegister(0x00004e98u, &step_dsp_rate_movg2_r0_neg_96_r6);
+    MK2CPP_HandRegister(0x00004e9bu, &step_dsp_rate_bsr16_to_0x50ef);
+    MK2CPP_HandRegister(0x00004e9eu, &step_dsp_rate_movg2_r0_neg_84_r2);
+    MK2CPP_HandRegister(0x00004ea1u, &step_dsp_rate_movg2_r0_0x0092_r3);
+    MK2CPP_HandRegister(0x00004ea5u, &step_dsp_rate_movg2_r0_neg_62_r6);
+    MK2CPP_HandRegister(0x00004ea8u, &step_dsp_rate_bsr16_to_0x50ef_a);
+    MK2CPP_HandRegister(0x00004eabu, &step_dsp_rate_movg2_r0_45_r5_a);
+    MK2CPP_HandRegister(0x00004eaeu, &step_dsp_rate_movg2_r0_70_r6_a);
+    MK2CPP_HandRegister(0x00004eb1u, &step_dsp_rate_movg2_dp_0x8000_r3);
+    MK2CPP_HandRegister(0x00004eb5u, &step_dsp_rate_sub_0x0400_r3);
+    MK2CPP_HandRegister(0x00004eb9u, &step_dsp_rate_bmi_7_to_0x4ec2);
+    MK2CPP_HandRegister(0x00004ebbu, &step_dsp_rate_add_r3_r6);
+    MK2CPP_HandRegister(0x00004ebdu, &step_dsp_rate_addx_0x00_r5_a);
+    MK2CPP_HandRegister(0x00004ec0u, &step_dsp_rate_bra_15_to_0x4ed1);
+    MK2CPP_HandRegister(0x00004ec2u, &step_dsp_rate_neg_r3);
+    MK2CPP_HandRegister(0x00004ec4u, &step_dsp_rate_sub_r3_r6);
+    MK2CPP_HandRegister(0x00004ec6u, &step_dsp_rate_subx_0x00_r5_b);
+    MK2CPP_HandRegister(0x00004ec9u, &step_dsp_rate_tst_r5);
+    MK2CPP_HandRegister(0x00004ecbu, &step_dsp_rate_bpl_4_to_0x4ed1);
+    MK2CPP_HandRegister(0x00004ecdu, &step_dsp_rate_clr_r6_a);
+    MK2CPP_HandRegister(0x00004ecfu, &step_dsp_rate_clr_r5_a);
+    MK2CPP_HandRegister(0x00004ed1u, &step_dsp_rate_movg2_r0_neg_2_r3);
+    MK2CPP_HandRegister(0x00004ed4u, &step_dsp_rate_movg2_r3_0xce78_r3);
+    MK2CPP_HandRegister(0x00004ed8u, &step_dsp_rate_add_r3_r3);
+    MK2CPP_HandRegister(0x00004edau, &step_dsp_rate_movg2_r3_0xac4e_r3);
+    MK2CPP_HandRegister(0x00004edeu, &step_dsp_rate_bmi_7_to_0x4ee7);
+    MK2CPP_HandRegister(0x00004ee0u, &step_dsp_rate_add_r3_r6_a);
+    MK2CPP_HandRegister(0x00004ee2u, &step_dsp_rate_addx_0x00_r5_b);
+    MK2CPP_HandRegister(0x00004ee5u, &step_dsp_rate_bra_15_to_0x4ef6);
+    MK2CPP_HandRegister(0x00004ee7u, &step_dsp_rate_neg_r3_a);
+    MK2CPP_HandRegister(0x00004ee9u, &step_dsp_rate_sub_r3_r6_a);
+    MK2CPP_HandRegister(0x00004eebu, &step_dsp_rate_subx_0x00_r5_c);
+    MK2CPP_HandRegister(0x00004eeeu, &step_dsp_rate_tst_r5_a);
+    MK2CPP_HandRegister(0x00004ef0u, &step_dsp_rate_bpl_4_to_0x4ef6);
+    MK2CPP_HandRegister(0x00004ef2u, &step_dsp_rate_clr_r6_b);
+    MK2CPP_HandRegister(0x00004ef4u, &step_dsp_rate_clr_r5_b);
+    MK2CPP_HandRegister(0x00004ef6u, &step_dsp_rate_movg3_r5_to_r0_45_b);
+    MK2CPP_HandRegister(0x00004ef9u, &step_dsp_rate_movg3_r6_to_r0_70_b);
+    MK2CPP_HandRegister(0x00004efcu, &step_dsp_rate_movg2_r0_66_r5);
+    MK2CPP_HandRegister(0x00004effu, &step_dsp_rate_movg2_r0_43_r4);
+    MK2CPP_HandRegister(0x00004f02u, &step_dsp_rate_bne_14_to_0x4f12);
+    MK2CPP_HandRegister(0x00004f04u, &step_dsp_rate_tst_r5_b);
+    MK2CPP_HandRegister(0x00004f06u, &step_dsp_rate_bne_10_to_0x4f12);
+    MK2CPP_HandRegister(0x00004f08u, &step_dsp_rate_clr_r2);
+    MK2CPP_HandRegister(0x00004f0au, &step_dsp_rate_movg2_r0_45_r2);
+    MK2CPP_HandRegister(0x00004f0du, &step_dsp_rate_movg2_r0_70_r3);
+    MK2CPP_HandRegister(0x00004f10u, &step_dsp_rate_bra_92_to_0x4f6e);
+    MK2CPP_HandRegister(0x00004f12u, &step_dsp_rate_movg2_r0_neg_2_r1);
+    MK2CPP_HandRegister(0x00004f15u, &step_dsp_rate_clr_r3_a);
+    MK2CPP_HandRegister(0x00004f17u, &step_dsp_rate_movg2_r0_neg_58_r2);
+    MK2CPP_HandRegister(0x00004f1au, &step_dsp_rate_movg2_r2_r3);
+    MK2CPP_HandRegister(0x00004f1cu, &step_dsp_rate_add_r3_r3_a);
+    MK2CPP_HandRegister(0x00004f1eu, &step_dsp_rate_movg2_r3_0x77a6_r6);
+    MK2CPP_HandRegister(0x00004f22u, &step_dsp_rate_movg2_dp_0xad2a_r2_a);
+    MK2CPP_HandRegister(0x00004f26u, &step_dsp_rate_mulxu_r6_r2_r3);
+    MK2CPP_HandRegister(0x00004f28u, &step_dsp_rate_tst_r4);
+    MK2CPP_HandRegister(0x00004f2au, &step_dsp_rate_bpl_30_to_0x4f4a);
+    MK2CPP_HandRegister(0x00004f2cu, &step_dsp_rate_neg_r4);
+    MK2CPP_HandRegister(0x00004f2eu, &step_dsp_rate_neg_r5);
+    MK2CPP_HandRegister(0x00004f30u, &step_dsp_rate_subx_0x00_r4);
+    MK2CPP_HandRegister(0x00004f33u, &step_dsp_rate_sub_r3_r5);
+    MK2CPP_HandRegister(0x00004f35u, &step_dsp_rate_subx_r2_r4);
+    MK2CPP_HandRegister(0x00004f37u, &step_dsp_rate_tst_r4_a);
+    MK2CPP_HandRegister(0x00004f39u, &step_dsp_rate_bpl_6_to_0x4f41);
+    MK2CPP_HandRegister(0x00004f3bu, &step_dsp_rate_clr_r4);
+    MK2CPP_HandRegister(0x00004f3du, &step_dsp_rate_clr_r5_c);
+    MK2CPP_HandRegister(0x00004f3fu, &step_dsp_rate_bra_21_to_0x4f56);
+    MK2CPP_HandRegister(0x00004f41u, &step_dsp_rate_neg_r4_a);
+    MK2CPP_HandRegister(0x00004f43u, &step_dsp_rate_neg_r5_a);
+    MK2CPP_HandRegister(0x00004f45u, &step_dsp_rate_subx_0x00_r4_a);
+    MK2CPP_HandRegister(0x00004f48u, &step_dsp_rate_bra_12_to_0x4f56);
+    MK2CPP_HandRegister(0x00004f4au, &step_dsp_rate_sub_r3_r5_a);
+    MK2CPP_HandRegister(0x00004f4cu, &step_dsp_rate_subx_r2_r4_a);
+    MK2CPP_HandRegister(0x00004f4eu, &step_dsp_rate_tst_r4_b);
+    MK2CPP_HandRegister(0x00004f50u, &step_dsp_rate_bpl_4_to_0x4f56);
+    MK2CPP_HandRegister(0x00004f52u, &step_dsp_rate_clr_r4_a);
+    MK2CPP_HandRegister(0x00004f54u, &step_dsp_rate_clr_r5_d);
+    MK2CPP_HandRegister(0x00004f56u, &step_dsp_rate_movg3_r5_to_r0_66);
+    MK2CPP_HandRegister(0x00004f59u, &step_dsp_rate_movg3_r4_to_r0_43);
+    MK2CPP_HandRegister(0x00004f5cu, &step_dsp_rate_clr_r2_a);
+    MK2CPP_HandRegister(0x00004f5eu, &step_dsp_rate_movg2_r0_70_r3_a);
+    MK2CPP_HandRegister(0x00004f61u, &step_dsp_rate_movg2_r0_45_r2_a);
+    MK2CPP_HandRegister(0x00004f64u, &step_dsp_rate_add_r5_r3);
+    MK2CPP_HandRegister(0x00004f66u, &step_dsp_rate_addx_r4_r2);
+    MK2CPP_HandRegister(0x00004f68u, &step_dsp_rate_movg3_r2_to_r0_45);
+    MK2CPP_HandRegister(0x00004f6bu, &step_dsp_rate_movg3_r3_to_r0_70);
+    MK2CPP_HandRegister(0x00004f6eu, &step_dsp_rate_sub_r0_62_r3);
+    MK2CPP_HandRegister(0x00004f71u, &step_dsp_rate_subx_r0_41_r2);
+    MK2CPP_HandRegister(0x00004f74u, &step_dsp_rate_sub_0x2ee0_r3);
+    MK2CPP_HandRegister(0x00004f78u, &step_dsp_rate_subx_0x00_r2);
+    MK2CPP_HandRegister(0x00004f7bu, &step_dsp_rate_bpl_79_to_0x4fcc);
+    MK2CPP_HandRegister(0x00004f7du, &step_dsp_rate_exts_r2);
+    MK2CPP_HandRegister(0x00004f7fu, &step_dsp_rate_not_r2);
+    MK2CPP_HandRegister(0x00004f81u, &step_dsp_rate_not_r3);
+    MK2CPP_HandRegister(0x00004f83u, &step_dsp_rate_addq_1_r3);
+    MK2CPP_HandRegister(0x00004f85u, &step_dsp_rate_addx_0x0000_r2_a);
+    MK2CPP_HandRegister(0x00004f89u, &step_dsp_rate_divxu_0x2ee0_r2_r3);
+    MK2CPP_HandRegister(0x00004f8du, &step_dsp_rate_cmp_r2_w_0x0000);
+    MK2CPP_HandRegister(0x00004f90u, &step_dsp_rate_beq_8_to_0x4f9a);
+    MK2CPP_HandRegister(0x00004f92u, &step_dsp_rate_addq_1_r3_a);
+    MK2CPP_HandRegister(0x00004f94u, &step_dsp_rate_neg_r2_a);
+    MK2CPP_HandRegister(0x00004f96u, &step_dsp_rate_add_0x2ee0_r2);
+    MK2CPP_HandRegister(0x00004f9au, &step_dsp_rate_clr_r1);
+    MK2CPP_HandRegister(0x00004f9cu, &step_dsp_rate_movg2_r2_r1);
+    MK2CPP_HandRegister(0x00004f9eu, &step_dsp_rate_add_r1_r1);
+    MK2CPP_HandRegister(0x00004fa0u, &step_dsp_rate_movg2_r1_0x78ee_r4);
+    MK2CPP_HandRegister(0x00004fa4u, &step_dsp_rate_clr_r1_a);
+    MK2CPP_HandRegister(0x00004fa6u, &step_dsp_rate_swap_r2);
+    MK2CPP_HandRegister(0x00004fa8u, &step_dsp_rate_movg2_r2_r1_a);
+    MK2CPP_HandRegister(0x00004faau, &step_dsp_rate_add_r1_r1_a);
+    MK2CPP_HandRegister(0x00004facu, &step_dsp_rate_movg2_r1_0x7aee_r1);
+    MK2CPP_HandRegister(0x00004fb0u, &step_dsp_rate_mulxu_r1_r4_r5);
+    MK2CPP_HandRegister(0x00004fb2u, &step_dsp_rate_rotl_r4);
+    MK2CPP_HandRegister(0x00004fb4u, &step_dsp_rate_rotl_r4_a);
+    MK2CPP_HandRegister(0x00004fb6u, &step_dsp_rate_and_0x03_r4);
+    MK2CPP_HandRegister(0x00004fb9u, &step_dsp_rate_swap_r4);
+    MK2CPP_HandRegister(0x00004fbbu, &step_dsp_rate_add_r1_r4);
+    MK2CPP_HandRegister(0x00004fbdu, &step_dsp_rate_tst_r3);
+    MK2CPP_HandRegister(0x00004fbfu, &step_dsp_rate_beq_62_to_0x4fff);
+    MK2CPP_HandRegister(0x00004fc1u, &step_dsp_rate_sub_0x0001_r3);
+    MK2CPP_HandRegister(0x00004fc5u, &step_dsp_rate_shlr_r4);
+    MK2CPP_HandRegister(0x00004fc7u, &step_dsp_rate_cntjmp_r3_5_to_0x4fc5);
+    MK2CPP_HandRegister(0x00004fcau, &step_dsp_rate_bra_51_to_0x4fff);
+    MK2CPP_HandRegister(0x00004fccu, &step_dsp_rate_exts_r2_a);
+    MK2CPP_HandRegister(0x00004fceu, &step_dsp_rate_divxu_0x2ee0_r2_r3_a);
+    MK2CPP_HandRegister(0x00004fd2u, &step_dsp_rate_tst_r3_a);
+    MK2CPP_HandRegister(0x00004fd4u, &step_dsp_rate_beq_6_to_0x4fdc);
+    MK2CPP_HandRegister(0x00004fd6u, &step_dsp_rate_movg2_0xffff_r4);
+    MK2CPP_HandRegister(0x00004fdau, &step_dsp_rate_bra_35_to_0x4fff);
+    MK2CPP_HandRegister(0x00004fdcu, &step_dsp_rate_clr_r1_b);
+    MK2CPP_HandRegister(0x00004fdeu, &step_dsp_rate_movg2_r2_r1_b);
+    MK2CPP_HandRegister(0x00004fe0u, &step_dsp_rate_add_r1_r1_b);
+    MK2CPP_HandRegister(0x00004fe2u, &step_dsp_rate_movg2_r1_0x78ee_r4_a);
+    MK2CPP_HandRegister(0x00004fe6u, &step_dsp_rate_clr_r1_c);
+    MK2CPP_HandRegister(0x00004fe8u, &step_dsp_rate_swap_r2_a);
+    MK2CPP_HandRegister(0x00004feau, &step_dsp_rate_movg2_r2_r1_c);
+    MK2CPP_HandRegister(0x00004fecu, &step_dsp_rate_add_r1_r1_c);
+    MK2CPP_HandRegister(0x00004feeu, &step_dsp_rate_movg2_r1_0x7aee_r1_a);
+    MK2CPP_HandRegister(0x00004ff2u, &step_dsp_rate_mulxu_r1_r4_r5_a);
+    MK2CPP_HandRegister(0x00004ff4u, &step_dsp_rate_rotl_r4_b);
+    MK2CPP_HandRegister(0x00004ff6u, &step_dsp_rate_rotl_r4_c);
+    MK2CPP_HandRegister(0x00004ff8u, &step_dsp_rate_and_0x03_r4_a);
+    MK2CPP_HandRegister(0x00004ffbu, &step_dsp_rate_swap_r4_a);
+    MK2CPP_HandRegister(0x00004ffdu, &step_dsp_rate_add_r1_r4_a);
+    MK2CPP_HandRegister(0x00004fffu, &step_dsp_rate_movg3_r4_to_dp_0xce3c);
+    MK2CPP_HandRegister(0x00005003u, &step_dsp_rate_movg2_r0_46_r1);
+    MK2CPP_HandRegister(0x00005006u, &step_dsp_rate_clr_r2_b);
+    MK2CPP_HandRegister(0x00005008u, &step_dsp_rate_movg2_r1_7_r2);
+    MK2CPP_HandRegister(0x0000500bu, &step_dsp_rate_cmp_r0_0x00a4_r2);
+    MK2CPP_HandRegister(0x0000500fu, &step_dsp_rate_beq_0x00c0_to_0x50d2);
+    MK2CPP_HandRegister(0x00005012u, &step_dsp_rate_movg3_r2_to_r0_0x00a4);
+    MK2CPP_HandRegister(0x00005016u, &step_dsp_rate_movg2_r0_62_r3);
+    MK2CPP_HandRegister(0x00005019u, &step_dsp_rate_movg2_r0_41_r2);
+    MK2CPP_HandRegister(0x0000501cu, &step_dsp_rate_sub_0x3c68_r3);
+    MK2CPP_HandRegister(0x00005020u, &step_dsp_rate_subx_0x01_r2);
+    MK2CPP_HandRegister(0x00005023u, &step_dsp_rate_bpl_85_to_0x507a);
+    MK2CPP_HandRegister(0x00005025u, &step_dsp_rate_exts_r2_b);
+    MK2CPP_HandRegister(0x00005027u, &step_dsp_rate_not_r2_a);
+    MK2CPP_HandRegister(0x00005029u, &step_dsp_rate_not_r3_a);
+    MK2CPP_HandRegister(0x0000502bu, &step_dsp_rate_addq_1_r3_b);
+    MK2CPP_HandRegister(0x0000502du, &step_dsp_rate_addx_0x0000_r2_b);
+    MK2CPP_HandRegister(0x00005031u, &step_dsp_rate_divxu_0x2ee0_r2_r3_b);
+    MK2CPP_HandRegister(0x00005035u, &step_dsp_rate_tst_r2_a);
+    MK2CPP_HandRegister(0x00005037u, &step_dsp_rate_beq_8_to_0x5041);
+    MK2CPP_HandRegister(0x00005039u, &step_dsp_rate_addq_1_r3_c);
+    MK2CPP_HandRegister(0x0000503bu, &step_dsp_rate_neg_r2_b);
+    MK2CPP_HandRegister(0x0000503du, &step_dsp_rate_add_0x2ee0_r2_a);
+    MK2CPP_HandRegister(0x00005041u, &step_dsp_rate_clr_r1_d);
+    MK2CPP_HandRegister(0x00005043u, &step_dsp_rate_movg2_r2_r1_d);
+    MK2CPP_HandRegister(0x00005045u, &step_dsp_rate_add_r1_r1_d);
+    MK2CPP_HandRegister(0x00005047u, &step_dsp_rate_movg2_r1_0x78ee_r4_b);
+    MK2CPP_HandRegister(0x0000504bu, &step_dsp_rate_clr_r1_e);
+    MK2CPP_HandRegister(0x0000504du, &step_dsp_rate_swap_r2_b);
+    MK2CPP_HandRegister(0x0000504fu, &step_dsp_rate_movg2_r2_r1_e);
+    MK2CPP_HandRegister(0x00005051u, &step_dsp_rate_add_r1_r1_e);
+    MK2CPP_HandRegister(0x00005053u, &step_dsp_rate_movg2_r1_0x7aee_r1_b);
+    MK2CPP_HandRegister(0x00005057u, &step_dsp_rate_mulxu_r1_r4_r5_b);
+    MK2CPP_HandRegister(0x00005059u, &step_dsp_rate_rotl_r4_d);
+    MK2CPP_HandRegister(0x0000505bu, &step_dsp_rate_rotl_r4_e);
+    MK2CPP_HandRegister(0x0000505du, &step_dsp_rate_and_0x03_r4_b);
+    MK2CPP_HandRegister(0x00005060u, &step_dsp_rate_swap_r4_b);
+    MK2CPP_HandRegister(0x00005062u, &step_dsp_rate_add_r1_r4_b);
+    MK2CPP_HandRegister(0x00005064u, &step_dsp_rate_tst_r3_b);
+    MK2CPP_HandRegister(0x00005066u, &step_dsp_rate_beq_69_to_0x50ad);
+    MK2CPP_HandRegister(0x00005068u, &step_dsp_rate_sub_0x0001_r3_a);
+    MK2CPP_HandRegister(0x0000506cu, &step_dsp_rate_shlr_r4_a);
+    MK2CPP_HandRegister(0x0000506eu, &step_dsp_rate_cntjmp_r3_5_to_0x506c);
+    MK2CPP_HandRegister(0x00005071u, &step_dsp_rate_tst_r4_c);
+    MK2CPP_HandRegister(0x00005073u, &step_dsp_rate_bne_56_to_0x50ad);
+    MK2CPP_HandRegister(0x00005075u, &step_dsp_rate_movi_r4_0x0001);
+    MK2CPP_HandRegister(0x00005078u, &step_dsp_rate_bra_51_to_0x50ad);
+    MK2CPP_HandRegister(0x0000507au, &step_dsp_rate_exts_r2_c);
+    MK2CPP_HandRegister(0x0000507cu, &step_dsp_rate_divxu_0x2ee0_r2_r3_c);
+    MK2CPP_HandRegister(0x00005080u, &step_dsp_rate_tst_r3_c);
+    MK2CPP_HandRegister(0x00005082u, &step_dsp_rate_beq_6_to_0x508a);
+    MK2CPP_HandRegister(0x00005084u, &step_dsp_rate_movg2_0xffff_r4_a);
+    MK2CPP_HandRegister(0x00005088u, &step_dsp_rate_bra_35_to_0x50ad);
+    MK2CPP_HandRegister(0x0000508au, &step_dsp_rate_clr_r1_f);
+    MK2CPP_HandRegister(0x0000508cu, &step_dsp_rate_movg2_r2_r1_f);
+    MK2CPP_HandRegister(0x0000508eu, &step_dsp_rate_add_r1_r1_f);
+    MK2CPP_HandRegister(0x00005090u, &step_dsp_rate_movg2_r1_0x78ee_r4_c);
+    MK2CPP_HandRegister(0x00005094u, &step_dsp_rate_clr_r1_g);
+    MK2CPP_HandRegister(0x00005096u, &step_dsp_rate_swap_r2_c);
+    MK2CPP_HandRegister(0x00005098u, &step_dsp_rate_movg2_r2_r1_g);
+    MK2CPP_HandRegister(0x0000509au, &step_dsp_rate_add_r1_r1_g);
+    MK2CPP_HandRegister(0x0000509cu, &step_dsp_rate_movg2_r1_0x7aee_r1_c);
+    MK2CPP_HandRegister(0x000050a0u, &step_dsp_rate_mulxu_r1_r4_r5_c);
+    MK2CPP_HandRegister(0x000050a2u, &step_dsp_rate_rotl_r4_f);
+    MK2CPP_HandRegister(0x000050a4u, &step_dsp_rate_rotl_r4_g);
+    MK2CPP_HandRegister(0x000050a6u, &step_dsp_rate_and_0x03_r4_c);
+    MK2CPP_HandRegister(0x000050a9u, &step_dsp_rate_swap_r4_c);
+    MK2CPP_HandRegister(0x000050abu, &step_dsp_rate_add_r1_r4_c);
+    MK2CPP_HandRegister(0x000050adu, &step_dsp_rate_clr_r3_b);
+    MK2CPP_HandRegister(0x000050afu, &step_dsp_rate_clr_r2_c);
+    MK2CPP_HandRegister(0x000050b1u, &step_dsp_rate_movg2_r0_0x00a4_r2);
+    MK2CPP_HandRegister(0x000050b5u, &step_dsp_rate_sub_0x80_r2);
+    MK2CPP_HandRegister(0x000050b8u, &step_dsp_rate_bmi_9_to_0x50c3);
+    MK2CPP_HandRegister(0x000050bau, &step_dsp_rate_divxu_r4_r2_r3);
+    MK2CPP_HandRegister(0x000050bcu, &step_dsp_rate_bge_16_to_0x50ce);
+    MK2CPP_HandRegister(0x000050beu, &step_dsp_rate_movi_r3_0x7fff);
+    MK2CPP_HandRegister(0x000050c1u, &step_dsp_rate_bra_11_to_0x50ce);
+    MK2CPP_HandRegister(0x000050c3u, &step_dsp_rate_neg_r2_c);
+    MK2CPP_HandRegister(0x000050c5u, &step_dsp_rate_divxu_r4_r2_r3_a);
+    MK2CPP_HandRegister(0x000050c7u, &step_dsp_rate_bge_3_to_0x50cc);
+    MK2CPP_HandRegister(0x000050c9u, &step_dsp_rate_movi_r3_0x7fff_a);
+    MK2CPP_HandRegister(0x000050ccu, &step_dsp_rate_neg_r3_b);
+    MK2CPP_HandRegister(0x000050ceu, &step_dsp_rate_movg3_r3_to_r0_0x00a6);
+    MK2CPP_HandRegister(0x000050d2u, &step_dsp_rate_movg2_r0_0x00a6_r4);
+    MK2CPP_HandRegister(0x000050d6u, &step_dsp_rate_bmi_11_to_0x50e3);
+    MK2CPP_HandRegister(0x000050d8u, &step_dsp_rate_add_dp_0xce3c_r4);
+    MK2CPP_HandRegister(0x000050dcu, &step_dsp_rate_bcc_13_to_0x50eb);
+    MK2CPP_HandRegister(0x000050deu, &step_dsp_rate_movi_r4_0xffff);
+    MK2CPP_HandRegister(0x000050e1u, &step_dsp_rate_bra_8_to_0x50eb);
+    MK2CPP_HandRegister(0x000050e3u, &step_dsp_rate_add_dp_0xce3c_r4_a);
+    MK2CPP_HandRegister(0x000050e7u, &step_dsp_rate_bcs_2_to_0x50eb);
+    MK2CPP_HandRegister(0x000050e9u, &step_dsp_rate_clr_r4_b);
+    MK2CPP_HandRegister(0x000050ebu, &step_dsp_rate_movg3_r4_to_r0_72);
+    MK2CPP_HandRegister(0x000050eeu, &step_dsp_rate_rts);
 }
 
 } /* anonymous namespace */
