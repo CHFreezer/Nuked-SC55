@@ -1,38 +1,37 @@
 # mk2cpp — SC-55mk2 固件 C++ 语义级翻译工程
 
-目标：把 **SC-55mk2 固件（rom1/rom2/rom_sm）**语义级翻译为 C++，以 **`mk2cpp.h`
-库形式集成回 GT，替换原 H8 解释器行为**（开关控制、未翻译 PC 可回退），
-设备/调度/音频全部复用 GT。当前聚焦**原版 28 复音固件的 C++ 翻译**：M1–M3 直译
-（主 H8 + 子 MCU 全执行面）已达成，`-mk2cpp` 与默认解释器逐指令/逐状态等价。
-**M4 = voice/PCM 语义化改写（stock 28），覆盖完成、语义化进行中**：主链路与
-voice 闭包例程（池/分配释放、note 物化与描述符链、P0 分派簇、ts_scan/C9、interp、
-0x4DE7 族、init/reset/d1ac、共享 helper、interp 间接目标、pool 续段、命令环
-handler 等）已接入 **4239 个 PC 入口**，静态可达闭包 **closure−gen−hand = 0**
-（2026-09-12）；**指定回归曲**（外部 MIDI，曲目见本机 local.md，覆盖绝大部分行为），扩展覆盖
-（代理侧一次性，非默认）为全量唯一 MIDI 曲目（数量见 local.md）两模式逐字节 MATCH（见
-`out/m4/41_full_regression.md`）；
-剩 185 个闭包外动态 PC（事件环/part/主循环等非 voice 子系统）与死字节/竞态
-不可达臂由 mixed 回退。**覆盖 ≠ 语义化**：当前 `src/hand/` 主体是
-`switch (mcu.pc)` + `case 0x....` 的逐指令直译（32.4k 行 / 4,232 case，
-可核对等价、不可当语义代码阅读），尚未达到本工程"人类可读语义 C++"的目标；
-M4 收口还需：(1) 宿主指令边界回调（支撑整例程语义写法且不破坏中断/MIDI
-时序）；(2) 语义重写（`pcm_misc.cpp` 13.9k 行垃圾桶已于 2026-09-12 拆分为
-`pcm_irq_service`/`pcm_fraction_div`/`note_on_setup`/`pitch_env`/`voice_param`/
-`ts_scan`/`cmd_ring` 七个 ROM 例程模块；其余模块命名审计与全量语义重写待做）；
-(3) 正式验收 oracle（n=28 音频 null + 用户在场试听，未执行）。
-快照审查确认 hand 无私有状态，无需 `MK2CPP_StateSave/Load`；
-**M5 = 256 复音扩展**（`pcm_ext_*`/`-voices:`/0xE800 窗口/page6-7/`PCM_MAX_VOICE`）
-是翻译目标之外的独立能力研究，已于 **2026-09-11 回滚暂缓**。
-**不做独立可执行程序。**
+目标：**把 SC-55mk2 的固件行为和声音合成逻辑，恢复为人能直接理解、修改和维护的
+原生 C++ 程序**。源码应像为现代 x86/amd64 编写的软件合成器，以完整算法、命名状态和
+正常的函数/分支/循环表达 MIDI、音符、voice、包络及声音生成；保持 MK2 原有逻辑和
+可观察行为，先完成原版 28 复音兼容，再扩展到 256 个发声单元。
+
+终态原生后端的启动、复位和正常播放直接执行上述算法，不运行 H8/M37450 指令、
+逐 PC 生成码或解释器回退。原解释器与逐指令翻译保留为参考后端和迁移工具。
+ROM 波形、音色与参数表仍是数据资产；算法需要的定宽整数、定点、截断和饱和可以保留。
+产物继续以库集成到现有程序，不增加独立 exe 要求；复用宿主音频/MIDI/显示设施与
+已确认的 PCM 算法，不意味着终态必须沿用 MCU 指令调度。
+
+**进度更新（2026-09-13）**：M1–M3 指令翻译已完成。M4 以 `97a0ae5` 为
+**hand 逐指令整理与 stock 28 行为回归检查点**收口，保留其全部成果，不回退。
+当前 hand 覆盖 4239 个 PC 入口，已消除 `case 0x`，但主体仍是操作寄存器和 PC 的
+`step_*` 指令函数，尚未达到完整算法表达。既有 n=28 音频 null 与状态产物一致；
+提交另记录回归曲、boot/定点窗口和用户试听通过，证据边界见 [复核](docs/12_polyphony_reassessment.md)。
+
+新增 **M4.5：原生算法重建（stock 28）**，承接原 M4 尚未完成的人类语义目标。
+验收必须同时满足算法可读、行为等价和正常运行脱离 MCU 指令执行。
+**M5：真 256 复音扩展**仍暂缓，待 M4.5 完成后在原生状态与声音内核上实施。
+目标全文与验收标准见 [M4.5 规格](docs/13_m45_native_reconstruction.md)。
 
 命名说明：`mk2cpp` = **MK2 ROM → C++**（准确）。不使用 `h8cpp` 这类名字——
 GT 是可跑多种固件的 H8 模拟器，本工程翻译的是 **MK2 的 ROM 代码**，不是重写 CPU 核；
 集成开关/符号统一 `mk2cpp`/`MK2CPP_`/`mk2c_` 前缀。
 
-Ground Truth（不可怀疑）：
-- ROM 字节（本地资产目录或 `../build/`，**不入 git**）
-- GT 仿真器 `../src/`（H8 语义、PCM、定时器、SM）
-- 既有反汇编基线 `../tools/baselines/`（本地 fixture）
+参考与证据：
+
+- ROM 字节及既有反汇编基线用于恢复固件算法（本地资产，**不入 git**）。
+- GT 仿真器 `../src/` 是重建等价性的运行参照，固定 ROM、输入时序和 PCM/滤波配置比较。
+- PCM 开盖逆向来源与 MK2 滤波的已知模型差异分别记录；GT 对照通过不等于实机差异已解决，
+  见 [PCM 来源与滤波边界](docs/12_polyphony_reassessment.md)。
 
 ## 目录
 
@@ -43,11 +42,11 @@ mk2cpp/
   src/mk2cpp.cpp       集成胶水：分派表、回退统计、版本（入库）
   src/gen/             自动翻译产物（**ROM 派生，不入 git**，本地生成，CMake 可选编译）
                        顶层 = 主 H8（mk2c_r1/r2 + init）；sm/ = 子 MCU（mk2c_sm + init，M3）
-  src/hand/            人工语义化改写（voice/PCM 子系统；入库策略见 02）
+  src/hand/            M4 手工逐指令参考实现（voice/PCM；M4.5 逐步重建算法）
   tools/h8lift/        ROM → C++ 反译器（入库）
   tools/tracediff/     两模式 trace/状态差分（入库）
   tools/cover/         覆盖率仪表盘（入库）
-  docs/                设计与约定（00–11：00_plan / 01_architecture / 02_conventions / 03–06 研究 / 07–11 M4/M5 设计）
+  docs/                00–02 计划/架构/约定；03–11 研究与旧集成设计；12 复评；13 M4.5 原生重建
   tests/               oracle 脚本（入库）；语料/快照本地
   out/                 运行/中间产物（不入 git）
 ```
@@ -108,7 +107,8 @@ cmake --build build
 | M1 ✅ | `mk2cpp.h` 集成（`-mk2cpp` + 混合回退）+ h8lift（h8dec/h8part/h8emit）+ tracediff + cover + hashdump | **已达成（2026-09-11）**：9217 PC 注册；boot 0–3M 与 demo 200–202M 两模式 trace + 状态哈希 + 基准 trace 全部一致 |
 | M2 ✅ | 主固件全执行面翻译（含未执行可达路径） | **已达成（2026-09-11）**：15999 PC（9217 执行集 + 6782 可达新增）全译、0 stub（13 处 `TODO(gt)`）；boot+demo200 两模式 trace + 状态哈希与 M1 基线一致 |
 | M3 ✅ | 子 MCU 固件翻译（`smemit` 全译 rom_sm 4KB）+ SM/主 CPU 5× 时序对接 | **已达成（2026-09-11）**：4096 SM PC 全译；boot+demo200 两模式 `s` 行 SM trace 逐条一致、hashdump 与 M1 基线同哈希（含 `hash.sm`/`sm_ram`/`hash.lcd_state`）；执行集（45/251 PC）全落翻译区间 |
-| M4（进行中） | voice/PCM 语义化改写（stock 28）：手写 C++ 覆盖 `native_pool`/`native_allocfree`/`voice_materialize`/`mask_acc`/`pcm_enable` + 闭包例程（`pcm_dispatch`/`note_path`/`note_chain_tail`/`pcm_interp`/`dsp_rate`/`reset_init` + 原 `pcm_misc` 拆分出的 7 模块 + 原 `shared_misc` 拆分出的 `dsp_rate_common`/`maint_fill_d1de`/`maint_merge_d1cd`/`maint_counter_d1d5`/`maint_voice_gate_d1ff`/`maint_table_walk_d1d6`/`maint_bit_scan_d1cc`/`shared_nop_rts` + `hand_prims.h`）共 4239 PC | 覆盖达成（2026-09-12）：closure−gen−hand=0、全量整曲逐字节一致（数量见 local.md）、boot/demo trace+hash 与基线一致；**语义化未完成**：hand 主体仍为逐指令 case 表（非可读语义 C++），模块需按 ROM 例程拆分重写；n=28 音频 null + 听感验收未执行 |
-| M5（暂缓） | 256 复音扩展（**目标 256 声**；`pcm_ext_*`/`-voices:`/0xE800/page6-7；原 M4c 容量优化）——独立于翻译目标的能力研究 | 已回滚（2026-09-11）；`-voices:255` 压力矩阵（n=32/64/128/255，255 = 0xff 哨兵妥协上限，非目标）随扩展暂缓；设计记录 `docs/07–11` |
+| M4 ✅（范围重划） | hand 逐指令整理、命名与模块划分，stock 28 回归检查点（`97a0ae5`） | 4239 PC；既有音频 null/状态产物一致，其他回归与试听记录见 12 §1.2；原人类语义目标移交 M4.5 |
+| **M4.5（待实施）** | **原生算法重建（stock 28）**：完整业务函数、逻辑状态、声音内核接口和原生调度 | 可读性审阅 + stock 28 音频/行为对照 + 启动与正常播放不执行主/子 MCU 指令或逐 PC 翻译 |
+| M5（暂缓） | 原生 voice 池与 PCM 内核的真 256 复音扩展 | 依赖 M4.5；验证容量边界、效果槽隔离、混音与实时性能；旧 255 上限不是最终验收 |
 
-详细设计见 `docs/00_plan.md`、`docs/01_architecture.md`、`docs/02_conventions.md`。
+详细设计见 [计划](docs/00_plan.md)、[架构](docs/01_architecture.md)、[约定](docs/02_conventions.md) 与 [M4.5 目标及验收](docs/13_m45_native_reconstruction.md)。
