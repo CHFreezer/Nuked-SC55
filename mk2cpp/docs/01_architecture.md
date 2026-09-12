@@ -105,7 +105,8 @@ const char *MK2CPP_Version(void);       // 生成集版本 + ROM sha256（诊断
 
 - GT `CMakeLists.txt` 增加可选源：`MK2CPP_GEN_DIR`（默认空 → 不编译生成物，
   GT 行为不变）；`mk2cpp/mk2cpp.cpp` 与小工具仅在开关打开时参与。
-- 生成物**不提交**（ROM 派生）；新克隆默认无翻译代码，纯 stock 行为。
+- 生成物**不提交**（ROM 派生）；新克隆默认无 gen，但已编译注册的 hand 仍可在
+  `-mk2cpp` 下参与，未覆盖入口回退。不加 flag 才维持默认解释器路径。
 - 本地构建：`cmake -DMK2CPP_GEN_DIR=mk2cpp/src/gen ...` 后正常 build。
 
 ## 5. 验证（详见 04，按集成修订）

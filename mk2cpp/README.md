@@ -72,7 +72,8 @@ cmake -S . -B build -G Ninja ^
 cmake --build build
 ```
 
-- 默认**不含**生成码：`-mk2cpp` 会打印 `no translated code linked` 并整体回退解释器。
+- 默认**不含自动生成码**；已编译并注册的 hand 入口仍可参与 `-mk2cpp`，其余入口回退。
+  `no translated code linked` 描述 gen 链接状态，不能单凭它判定整个运行都在解释器中。
 - 本地启用生成码：追加 `-DMK2CPP_GEN_DIR=<repo>/mk2cpp/src/gen`（生成物不入 git）。
 - 验证（两模式零回归）：
   `nuked-sc55.exe -mk2 -demo -tracepc <out> 200000000 202000000` vs

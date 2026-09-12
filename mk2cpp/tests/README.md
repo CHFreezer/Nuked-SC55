@@ -1,276 +1,237 @@
 # mk2cpp/tests
 
-Oracle scripts for the mk2cpp integration. **Canonical, cross-platform
-implementations are the Python 3 scripts** (standard library only, no bundled
-interpreter):
+2026-09-13 按现有三个 Python 脚本及 GT 源码核对。命令从仓库根执行，使用自己的
+Python 3（仅标准库，不提交嵌入式解释器）。本机解释器与素材设置见本地 `local.md`；
+ROM、schedule、基线和运行输出不入库。
 
-- `m4_quick_gate.py` — default regression: the designated song (see local.md)
-  in both modes, full-WAV SHA256.
-- `two_mode_check.py` — scenario regression: stock vs `-mk2cpp` traces/hashes
-  plus the frozen `tools/baselines` fixtures.
+## 当前测试与里程碑边界
 
-Run them with your own Python 3 interpreter: `python3 mk2cpp/tests/m4_quick_gate.py`
-(never commit an embedded interpreter). GT never self-exits, so the scripts poll
-for the completion marker and force-kill the process; outputs go under
-`mk2cpp/out/`.
+**目前 `-mk2cpp` 仍运行 M1–M4 的逐指令翻译/混合回退。** M4 已保留为整理与回归
+检查点，M4.5 原生控制分支待实现；这些脚本通过不代表原生算法重建已完成。
 
-本机相关设置（解释器、本地素材路径等）因人而异，不入库；按需自建仓库根的
-`local.md` 并以其为准（README 不写具体值）。
+M4.5 继续用同一 flag 进入原生分支，复用 PCM 仿真、LCD、RtMidi、SDL 等设施；
+不加 flag 维持原模拟器。目标和验收见 [13 M4.5 规格](../docs/13_m45_native_reconstruction.md)。
+现有逐 PC trace/寄存器/旧 SRAM 对照属于参考与迁移层；原生后端需要逻辑状态、事件
+时序、音频、默认分支回归及运行依赖审计，不能被强制要求复现 H8 指令轨迹。
 
-No `.ps1` gate scripts remain: `two_mode_check.ps1`, `gt_run.ps1` and
-`m4_audio_null.py` were removed after their logic was ported to Python;
-`m4_stress_voices.ps1` was deleted with the M5 rollback (rewrite in Python when
-M5 restarts). The Python scripts are the only gate.
+| 现有脚本 | 用途 | 默认是否运行仿真 | SDL 模式 |
+|---|---|---|---|
+| [m4_quick_gate.py](m4_quick_gate.py) | 指定回归曲，两模式并行，整 WAV 文件 SHA-256 | 是 | dummy 音频/视频，无需用户在场 |
+| [two_mode_check.py](two_mode_check.py) | boot/demo200 或自定义窗口；两模式依次比较 trace 和完整 hash 文件 | 是 | dummy 音频/视频，无需用户在场 |
+| [m4_audio_null.py](m4_audio_null.py) | stock 28 音频窗口、选定状态标量、可选 hand A/B 与冻结基线 | 否；默认只做规划及 GT `-h` 探测 | `--execute --user-present` 才运行真实 LCD/音频 |
 
-## 默认回归口径（2026-09-12 起，用户要求）
+`m4_audio_null.py` **仍存在且可用**。旧 `.ps1` 测试入口已经删除；
+`m4_stress_voices.ps1` 也已删除，M5 重启时按原生架构以 Python 补齐容量测试。
 
-- **指定回归曲**（曲目见本机 local.md；外部 MIDI 测试冻结在这一首，曲子足够
-  复杂，覆盖绝大部分行为）。**不再默认或半默认测其他曲子**。默认回归 =
-  `python3 mk2cpp/tests/m4_quick_gate.py`（回归曲两模式并行 + WAV 逐字节，约 65 s）；
-  改动主链路/非 voice 路径时再跑
-  `python3 mk2cpp/tests/two_mode_check.py --scenario boot|demo200`（各 1–2 分钟）。
-- **demo 预算 = 60 秒模拟时间**：`m4_quick_gate.py --demo`（窗口
-  `[144M, 1440M)` cycles，144M 起跳过开机动画，墙钟约 61 s）。内置 demo 有 5 首曲，
-  **永远不默认跑完整播放列表**；`two_mode_check.py --scenario demo200` 的
-  `[200M,202M)` 只是 2M-cycle 冻结 fixture（秒级），两者用途不同、都不长跑。
-- **不默认跑全量语料**（`out/m4/corpus/midi*.sched`，规模见 local.md）与压力矩阵
-  （cov_mix/stress_*）：它们是代理侧扩展覆盖，不是用户要求；仅在用户明确
-  要求"全量"时运行（8 并发约 30–40 分钟），且必须分批并汇报总耗时。
-- **单次前台测试预算 ≤3 分钟**；超过必须后台/分片，并先告知用户。长跑会
-  阻塞会话，用户以此计算机会成本——不要用"更保险"扩大默认测试范围。
+## 默认回归范围与预算
 
-### 确定性与 `-nomidi`（必须）
+- 外部 MIDI 默认只测指定回归曲，不默认或半默认扩展到其他曲子。通常运行
+  `python3 mk2cpp/tests/m4_quick_gate.py`，历史墙钟约 65 秒，实际以本次输出为准。
+- 主链路/非 voice 路径改动时，再按需运行 `two_mode_check.py --scenario boot`
+  或 `--scenario demo200`；文档编辑不需要启动音频回归。
+- `m4_quick_gate.py --demo` 默认推进到 1440M cycles，即 reset 后 60 秒模拟时间；
+  录音窗口是 `[144M,1440M)`，实际录音 **54 秒**，历史墙钟约 61 秒。
+  不默认跑完整 demo 播放列表。`two_mode_check.py` 的 demo200 窗口只有 2M cycles，
+  是独立的冻结 trace 场景。
+- 全量曲库和容量压力矩阵仅在用户明确要求相应范围时运行，分批并汇报耗时。
+- 单次前台测试预算不超过 3 分钟，预计超出时提前告知并后台/分片。
+  **脚本硬超时不等于工作预算**：quick gate 默认超时为 300 秒；前台运行可显式用
+  `--timeout 180`。two-mode 默认每个进程 120 秒、两模式串行，总时间可能超过 3 分钟。
 
-- 所有 oracle GT 运行都要加 `-nomidi`：Windows 构建默认打开主机第一个 MIDI
-  输入口，外部字节由回调线程经 `MCU_PostUART` 在任意 cycle 注入，造成运行间
-  hash 漂移（2026-09-12 实测：gate 两实例相对历史同点漂移，端口安静后复跑恢复；
-  `src/mcu.cpp` 已加 `-nomidi` 跳过 `MIDI_Init`）。
-- `two_mode_check.py`、`m4_quick_gate.py` 已默认带 `-nomidi`；手工 oracle
-  运行也必须带。
+三个脚本的仿真命令均带 `-nomidi`，手工 oracle 也必须带，避免 RtMidi 外部输入破坏
+确定性。脚本通过 `-midiseq` 注入的指定输入仍有效。两个 headless 脚本设置
+`SDL_VIDEODRIVER=dummy`、`SDL_AUDIODRIVER=dummy`、`SDL_RENDER_DRIVER=software`；
+audio-null 的真实运行会移除环境中的前两个变量，启用真实窗口与音频。
 
-## M4 oracle scripts (Wave 0c)
-
-> **回滚说明（2026-09-11）**：256 复音扩展（`-voices:<n>` 等）已从 GT 回滚到原版
-> 28 复音实现。`m4_stress_voices.ps1`（n=32/64/128/255）所依赖的 `-voices:` 现已无效，
-> 该脚本**暂缓**（当前运行会静默按 28 复音跑，结果不代表压力测试）。
-> `m4_audio_null.py` 的 n=28 音频 null 仍有效（`-voices:28` 现为 no-op，等价默认 28）。
-
-| Script | Purpose | Real GT run? |
-|---|---|---|
-| `m4_audio_null.py` | n=28 audio null: stock vs `-mk2cpp`（`-voices:28` 已回滚为 no-op，等价默认 28；`[300M,320M)` WAV payload / `-audiohash` / state scalars）；可选 `--hand-off` 同二进制 A/B、`--check-baseline` 冻结基准门禁（G6） | only with `--execute --user-present` |
-| （256 压力矩阵）| n=32/64/128/255（255 = 妥协上限，目标 256）**随 M5 暂缓**；原 `m4_stress_voices.ps1` 已删除，M5 重启时以 Python 重写 | 暂缓 |
-| `two_mode_check.py` | M1-M3 default-path regression (trace/hash, `SDL_*_DRIVER=dummy`, `-nomidi`); cross-platform | headless by design, unchanged |
-| `m4_quick_gate.py` | **默认回归**：回归曲两模式并行 WAV 逐字节（`-nomidi`，硬超时，约 65 s）；`--demo` 跑内置 demo 60 s 预算（`[144M,1440M)`，约 61 s）；`--sched` 可指定其他 schedule（仅调试用，默认冻结回归曲） | headless, no user needed |
-
-Hard boundaries for the M4 scripts:
-
-- **Dry-run by default.** Without `--execute` the scripts only validate paths,
-  probe the GT build (`-h` only) and print the exact commands, timeout and
-  comparison plan. Dry-run exits `0`; missing GT options are printed as
-  `ERROR:` lines and `--require-ready` turns them into exit `2`.
-- **`--execute` requires `--user-present`** (otherwise exit `2`) and starts GT
-  with LCD window + real audio. They never set `SDL_VIDEODRIVER`/`SDL_AUDIODRIVER`.
-- Timeout is `ceil(end_cycles/24e6 * 2) + 15` s (320M -> 42 s, 400M -> 49 s);
-  the process is force-killed after the completion markers appear.
-- Automated = file/stream comparison and judgement parsing. Manual = LCD
-  observation and the n=28 A/B listen; SKIP is not PASS and a green summary
-  never replaces the on-site listen.
-
-### m4_audio_null.py
+## m4_quick_gate.py
 
 ```bash
-# dry-run (default, no GT process)
+# 指定回归曲；显式限制本次等待预算
+python3 mk2cpp/tests/m4_quick_gate.py --timeout 180
+
+# 内置 demo，reset 后推进到 60 秒，录音 54 秒
+python3 mk2cpp/tests/m4_quick_gate.py --demo --timeout 180
+```
+
+| 参数 | 默认值 | 含义 |
+|---|---|---|
+| `--sched` | `mk2cpp/out/m4/corpus/regression.sched` | 指定回归曲 schedule；其他素材只在明确调试范围内使用 |
+| `--start` | `200000000` | MIDI 注入及录音起点 |
+| `--demo` | 关闭 | 用内置 demo 替代外部 schedule |
+| `--demo-start` / `--demo-end` | `144000000` / `1440000000` | demo 录音窗口 |
+| `--timeout` | `300` | 两个进程启动后共用的等待截止时间，单位秒；不是每个模式再各等 300 秒 |
+| `--exe` | `build/nuked-sc55[.exe]` | GT 可执行文件 |
+| `--outdir` | `mk2cpp/out/quick_gate` | WAV、meta 与日志目录 |
+
+MIDI 录音终点为 `start + schedule 最后一个有效行的 cycle + 2000000`；这不是“等所有
+release 声部结束”。比较的是当前窗口生成的整 WAV 文件（含文件头），通过条件为
+两个模式均取得非空 `.meta` 完成标记且非空 WAV 的 SHA-256 相同。
+脚本不比较 PC trace、状态 hash 或冻结 WAV 基线，也不执行人工试听。
+
+输出为 `stock.wav`、`tr.wav`、各自 `.wav.meta` 和 stdout/stderr 日志，结果打印到终端。
+完成或超时后用 Python `proc.kill()` 结束仍在运行的进程。
+
+## two_mode_check.py
+
+```bash
+# boot [0,3M)
+python3 mk2cpp/tests/two_mode_check.py
+
+# demo [200M,202M)
+python3 mk2cpp/tests/two_mode_check.py --scenario demo200
+
+# 自定义窗口：脚本参数必须放在 --args 之前
+python3 mk2cpp/tests/two_mode_check.py --scenario custom \
+    --window-from 0 --window-to 1000000 --hash-at 1000000 --args -demo
+```
+
+`--args` 使用 `argparse.REMAINDER`：**其后所有 token 都直接交给 GT**。如果把
+`--window-to` 等脚本参数放在它后面，脚本就收不到这些设置。只在 custom 场景使用它。
+
+| 参数 | 默认值 | 含义 |
+|---|---|---|
+| `--scenario` | `boot` | `boot`、`demo200` 或 `custom` |
+| `--window-from` / `--window-to` | `0` / `0` | custom 必填合法窗口，终点大于起点 |
+| `--hash-at` | `0` | custom 状态采样 cycle，0 表示窗口终点 |
+| `--args` | 空 | custom 的附加 GT 参数，必须位于脚本参数末尾 |
+| `--timeout` | `120` | 每个模式的等待超时，秒；两模式串行 |
+| `--exe` | `build/nuked-sc55[.exe]` | GT 可执行文件 |
+| `--outdir` | `mk2cpp/out/twomode` | trace、hash 和日志目录 |
+
+boot 固定 `[0,3000000)` / hash@3000000；demo200 固定
+`[200000000,202000000)` / hash@202000000。窗口和 hash 参数仅用于 custom。
+
+脚本比较：
+
+- `def.trace` 与 `tr.mk2cpp.trace` 的整文件 SHA-256；
+- `def.hash` 与 `tr.mk2cpp.hash` 的整文件 SHA-256；
+- 冻结场景的默认 trace 与 `tools/baselines` 对应 fixture；fixture 不存在则该项 SKIP。
+
+输出还包括 `def.stdout.txt` / `def.stderr.txt` 与对应的 `tr.mk2cpp` 日志。
+等待条件是非空 hash，加上 trace 尾部 cycle 达到终点附近，或非空 trace 连续四次
+轮询大小不变。尾行解析接受 `m` 和 `s`；不是“必须最后一条主 MCU trace 精确到终点”。
+取得输出或超时后结束 GT 进程。
+
+当前统一 trace 含子 MCU 行，完整状态 hash 也覆盖 SM/LCD 状态。通过只证明所测
+配置和窗口的一致性，不能单凭它证明所有 SM/面板行为、全执行面覆盖或 M4.5 已完成。
+
+## m4_audio_null.py
+
+默认不运行仿真或试听，但**会启动 GT `-h` 子进程做能力探测**（最多等待 30 秒），
+校验参数并写 `plan.txt`。路径合法时，缺少必需选项只打印错误；加 `--require-ready`
+才因此退出 2。dry-run 成功不是音频 PASS。
+
+真实仿真必须同时带 `--execute --user-present`；这两个参数只适用于本脚本。
+自动检查通过后仍需用户完成 LCD 观察和 A/B 试听，脚本的绿色摘要不能代替人工验收。
+
+```bash
+# 默认规划：只运行 GT -h，不播放
 python3 mk2cpp/tests/m4_audio_null.py
 
-# readiness gate: exit 2 until the GT options exist
+# 本地 GT 构建能力检查
 python3 mk2cpp/tests/m4_audio_null.py --require-ready
 
-# real run (user present, LCD + audio; host MIDI disabled via -nomidi)
+# 用户在场：真实 LCD + 音频，stock 与 M4 依次运行
 python3 mk2cpp/tests/m4_audio_null.py --execute --user-present
 
-# frozen stock 300M-320M baseline gate (G6; local fixture, missing baseline = SKIP)
+# 加入本地冻结基线比较
 python3 mk2cpp/tests/m4_audio_null.py --check-baseline --execute --user-present
 
-# MIDI-driven variant and W3 gate-5 A/B (schedule path from local.md)
+# 指定 MIDI 场景与 hand 开关 A/B
 python3 mk2cpp/tests/m4_audio_null.py --scenario midi \
     --midi-schedule mk2cpp/out/m4/corpus/regression.sched --hand-off \
     --execute --user-present
 ```
 
-| Parameter | Default | Meaning |
+| 参数 | 默认值 | 含义 |
 |---|---|---|
-| `--scenario` | `demo` | `demo` or `midi` (`-midiseq <schedule> 200000000`) |
-| `--audio-start` / `--audio-end` | `300M` / `320M` | audio window |
-| `--state-at` | `0` (= end) | `-hashdump` cycle; must be `>= 200M` |
-| `--timeout` | `0` (auto) | per-run kill timeout |
-| `--outdir` | `mk2cpp/out/m4/audio_null` | outputs (gitignored) |
-| `--midi-schedule` | empty | required for `--scenario midi` |
-| `--gain` | empty | optional `-gain:<x|db>`; must match across runs |
-| `--check-baseline` | off | G6 gate: verify `tools/baselines/m4_audio/SHA256SUMS.txt` (mismatch/missing listed file = FAIL) and require the stock WAV payload/`-audiohash` to match the frozen capture; missing baseline dir/manifest = SKIP |
-| `--baseline-dir` | `tools/baselines/m4_audio` | frozen baseline directory |
-| `--baseline-name` | `stock_300M_320M` | frozen file stem inside `--baseline-dir` |
-| `--hand-off` | off | adds `-mk2cpp-hand:0` A/B run (W3 gate 5) |
-| `--require-ready` | off | dry-run exits `2` when required GT options are missing |
-| `--execute` / `--user-present` | off | the only way to launch GT; both are required |
-| `--exe` | `build/nuked-sc55[.exe]` | GT executable override |
+| `--scenario` | `demo` | `demo` 或 `midi`，后者用固定 200M 起点注入 |
+| `--audio-start` / `--audio-end` | `300000000` / `320000000` | WAV 录音窗口 |
+| `--state-at` | `0` | 0 表示 audio-end；必须至少 200M |
+| `--timeout` | `0` | 正数覆盖每个模式超时；否则 `max(10, ceil(audio_end / 24e6 * 2 + 15))` 秒 |
+| `--outdir` | `mk2cpp/out/m4/audio_null` | 计划、采集与比较结果 |
+| `--midi-schedule` | 空 | midi 场景必需 |
+| `--gain` | 空 | 两模式使用相同的 `-gain:<值>` |
+| `--check-baseline` | 关闭 | 增加冻结 stock 音频基线比较 |
+| `--baseline-dir` | `tools/baselines/m4_audio` | 本地基线目录 |
+| `--baseline-name` | `stock_300M_320M` | 冻结文件名前缀 |
+| `--hand-off` | 关闭 | 增加 `-mk2cpp-hand:0` 第三个运行模式 |
+| `--require-ready` | 关闭 | dry-run 在缺少必需 GT 选项时退出 2 |
+| `--execute` / `--user-present` | 关闭 | 两者同时给出才允许真实仿真 |
+| `--exe` | `build/nuked-sc55[.exe]` | GT 可执行文件 |
 
-Checks: `-audiohash` equality, WAV payload SHA256 (`pcmdiff --tolerance 0`
-report when built), finalized WAV header, `.meta` window/rate/length equality,
-layout-independent state scalars (`mcu.pc/sr/cycles`, `pcm.config_reg_3c/3d`),
-`LCDEN 0 <= 2`, CPU duty report (INFO), and the hand on/off A/B. With
-`--check-baseline` it adds the G6 checks: `baseline:integrity` (SHA256SUMS.txt
-re-verification; mismatch/missing listed file = FAIL), `baseline:wav` (stock
-payload == frozen payload) and `baseline:audiohash` (stock `audio_fnv1a` ==
-frozen). A missing baseline directory, manifest or file is reported as `SKIP`
-with the reason; the dry-run prints the baseline status but keeps exit `0`.
+默认 320M 终点对应每模式 42 秒硬超时；WAV 窗口长度为 20M cycles，约 0.833 秒。
+`--state-at` 若晚于 audio-end，默认超时仍按 audio-end 计算，应自行安排足够的超时。
+当前脚本的 GT 工作目录固定为仓库 `build/`，仅指定 `--exe` 不会改变它。
 
-### 256-voice stress matrix（M5 暂缓）
+完成条件为 WAV/meta/audiohash/state 文件就绪，随后结束进程。自动检查包括：
 
-n=32/64/128/255 压力矩阵随 256 复音扩展（M5）暂缓；原 `m4_stress_voices.ps1`
-已删除，M5 重启时以 Python 重写（`-voices:` CLI 已回滚，当前不可用）。O1–O10
-映射与 S1–S7 设计保留在 `docs/10_m4_oracle.md`。
+- `audio_fnv1a`（到 audio-end 的累计输出流），以及窗口内 WAV payload 的 SHA-256；
+  WAV 通过初步解析但 payload hash 未能匹配时，可调用已构建的 `pcmdiff --tolerance 0`。
+- meta 的起止 cycle、采样率、通道、格式与 sample_pairs；两边均有 payload FNV 时比较它。
+- `SCALAR_KEYS`：`mcu.cp/pc/sr/cycles`、`pcm.config_reg_3c/3d`、`pcm.irq_assert`。
+  **这里只比较选定标量，不比较完整 state.hash 文件**。
+- 日志中 `LCDEN 0` 出现不超过两次的复位循环启发式；这不是 LCD 图像等价检查。
+- 可选 hand-off 的 audiohash/WAV/状态标量对照；CPU duty 仅作信息，标准库
+  `subprocess.Popen` 无 `cpu_times()`，当前会显示 n/a，不能当作性能测量结果。
 
-### MIDI corpus (not committed)
+标量/meta 比较使用字典取值；两边同时缺少某个字段可能不会触发差异，因此 PASS
+不能代替输出格式完整性检查。WAV 比较也不是完整的 RIFF 格式校验器。
 
-`midisched` (see `../tools/README.md`) converts SMF to the `-midiseq` schedule
-format. Put the result under `mk2cpp\out\m4\corpus\` (gitignored):
+基线检查遵循实现的两层处理：
 
-```powershell
-clang -O2 -o mk2cpp\tools\midisched\midisched.exe mk2cpp\tools\midisched\midisched.c
-mk2cpp\tools\midisched\midisched.exe poly255.smf -o mk2cpp\out\m4\corpus\poly255.sched
-```
+- `SHA256SUMS.txt` 中可解析条目所列文件缺失或哈希错误，`baseline:integrity` 为 FAIL。
+- 基线目录、manifest 缺失/不可读或没有可解析条目，该组检查 SKIP。
+- 冻结 WAV 或 audiohash 缺失/不可解析，对应比较项可 SKIP；若它同时是 manifest
+  中的条目，前面的 integrity FAIL 仍保留。冻结输出与当前 stock 不同则 FAIL。
 
-Schedule cycles are relative to the `-midiseq` start argument (the scripts pass
-`200000000`). `midisched` splits each message into per-byte lines with a
-`--byte-gap` (default 7680 cycles = 320 us) so the 8192-byte GT UART ring is not
-overrun; `--byte-gap 0` groups the bytes of one event on one line.
+输出包括 `plan.txt`、`summary.txt`、`stock`/`m4`/可选 `handoff` 的 WAV/meta、
+`.audiohash`、`.state.hash` 和日志，必要时另有 `audio_diff*.md`。
+SKIP 不是 PASS；返回 0 也不代表冻结基线或人工试听已经验收。
 
-## two_mode_check.py usage (cross-platform)
+## 当前 GT 接口与历史扩展
 
-```bash
-# boot [0,3M), expected PASS
-python3 mk2cpp/tests/two_mode_check.py
+[GT 源码](../../src/mcu.cpp) 已实现并在帮助中列出 `-wav:`、`-audiowin`、
+`-audiohash`、`-midiseq`、`-snapinfo` 和 `-mk2cpp-hand:0|1`，并非仍待 Wave 0 实现。
+本地二进制可能落后于源码，audio-null 的能力探测仍有用途；探测到帮助文本不等于
+执行行为已经测试通过。
 
-# demo window [200M,202M)
-python3 mk2cpp/tests/two_mode_check.py --scenario demo200
+- WAV 在窗口结束时回填长度并关闭，最后写 `.meta` 完成标记；强杀进程不负责完成文件头。
+- `-audiohash` 是指定 cycle 之前输出流的累计 FNV-1a64；`-audiowin` 只限制 WAV 窗口。
+- `-midiseq` 以相对 start 的 cycle 注入字节，经过 UART 环形缓冲及背压。
+- `-snapinfo` 现有心跳、MCU/PCM 标量与 voice mask popcount；**没有 `pcm.ext_voices`**。
+- 当前三个脚本都不验证已回滚的 `PCM_WriteExt`/扩展寄存器 trace 或 256 容量。
 
-# custom window / extra GT args
-python3 mk2cpp/tests/two_mode_check.py --scenario custom \
-    --args -demo --window-from 0 --window-to 1000000 --hash-at 1000000
-```
+`-voices:` 容量接口已回滚。audio-null 当前仍给翻译模式附带历史 `-voices:28` 参数，
+当前 GT 没有对应容量处理，忽略它后仍跑 stock 28；这不是可用的复音选择接口。
+255 是旧实验的哨兵妥协，不是当前能力或新的验收上限。M5 目标是 **256 个可同时
+活跃的底层发声单元**，在 M4.5 之后于既有 PCM 仿真基础上扩容，保持默认分支行为。
+旧矩阵仅作历史研究，见 [10](../docs/10_m4_oracle.md)；新路线以 [00](../docs/00_plan.md)
+与 [13](../docs/13_m45_native_reconstruction.md) 为准。
 
-| Parameter | Default | Meaning |
-|---|---|---|
-| `--scenario` | `boot` | `boot` (`-mk2`), `demo200` (`-mk2 -demo`), `custom` (`-mk2` + `--args`) |
-| `--args` | empty | Extra GT args for `--scenario custom` (nargs after `--args`) |
-| `--window-from` / `--window-to` | `0` | custom trace window, `--window-to > --window-from` required |
-| `--hash-at` | window end | `-hashdump` trigger cycle |
-| `--timeout` | `120` | per-run hard timeout (s); GT is force-killed afterwards either way |
-| `--exe` | `build/nuked-sc55[.exe]` | GT executable override |
-| `--outdir` | `mk2cpp/out/twomode` | output directory |
+M4 的既有音频 null、状态产物和回归记录见 [12 §1.2](../docs/12_polyphony_reassessment.md)。
+不能再写成“只有 dry-run，从未运行”；也不能把历史记录算作当前修改后自动重跑的结果。
 
-Scenario presets: `boot` = `[0,3000000)` hash@3000000; `demo200` =
-`[200000000,202000000)` hash@202000000.
+## MIDI 素材与运行记录
 
-Comparison: `def.trace` SHA256 == `tr.mk2cpp.trace` SHA256; `def.hash` ==
-`tr.mk2cpp.hash`; `def.trace` == `tools/baselines` fixture for the frozen
-scenarios (SKIP when the local fixture is absent). On mismatch the first
-differing line is printed.
+[midisched](../tools/README.md) 把 SMF 转成文本 schedule，输出放 `mk2cpp/out/`。
+cycle 相对 `-midiseq` 的 start；默认字节间隔为 7680 cycles（320 微秒）。
+它处理 MIDI 串行化；GT 的缓冲背压仍需保留，单靠转换器不能证明所有负载无溢出。
+指定素材身份与本机路径留在 `local.md`，不要写入公开文档。
 
-Since M3 the SM (sub MCU) is part of this check automatically: the unified trace
-carries the `s <sm_cycles> <pc>` SM lines (boot ~125K, demo200 ~208K), and the
-state hash includes `hash.sm`, `sm_ram`, `sm_shared_ram`, `sm_device_mode` and
-`hash.lcd_state` — so a PASS also proves the translated SM (`-mk2cpp`) drives the
-SM state and LCD identically to the GT interpreter.
+记录每次实际使用的代码/二进制版本、ROM/PCM 配置、输入、窗口、命令、自动检查
+及人工验收结果。窗口比较通过不证明原生后端已经接管：当前调度优先 hand，其次 gen，
+最后解释器回退（见 [mk2cpp.cpp](../src/mk2cpp.cpp)）。缺少 gen 不代表完全没有 hand；
+单看版本字符串或相同音频不能判断实际执行了多少翻译代码，必须结合注册/命中证据。
 
-## Outputs (under `--outdir`)
+## 退出码
 
-```
-def.trace / def.hash                 default interpreter run
-tr.mk2cpp.trace / tr.mk2cpp.hash     -mk2cpp run
-def.stdout.txt / def.stderr.txt      redirected run logs (same for tr.mk2cpp)
-```
+| 脚本 | 0 | 1 | 2 |
+|---|---|---|---|
+| quick gate | 输出就绪且整 WAV SHA-256 相同 | 超时/输出缺失/音频不同 | 显式检查到 exe 或 schedule 缺失、参数解析错误 |
+| two-mode | 所有已执行比较无 FAIL，缺基线可 SKIP | 运行或 trace/hash/基线比较失败 | 显式检查到 exe 缺失、custom 窗口不合法、参数解析错误 |
+| audio-null | dry-run 成功，或自动检查无 FAIL（可含 SKIP） | 自动检查有 FAIL | 参数/路径检查失败、必需能力缺失的门禁或用户在场门禁未满足 |
 
-## Frozen GT interface (Wave 0a/0b minimum commitments)
-
-The M4 scripts are written against these frozen interfaces even though the
-current GT build does not implement them yet. The capability probe reads `-h`
-only; every implemented option must be advertised there.
-
-1. `-wav:<file>`: producer-side tap in `MCU_PostSample` after `master_gain` and
-   the int16 clamp; standard RIFF/WAVE header (PCM=1, ch=2, S16,
-   rate=`spec.freq`); default off, zero behavior change without the flag.
-2. `-audiowin <start> <end>`: only write samples with `mcu.cycles` in
-   `[start,end)`. At `end` backfill the RIFF/data sizes, flush and close the
-   WAV, then write `<file>.meta` **last** as the completion marker (`wavdump v1`
-   with `rate/channels/format/start_cycles/end_cycles/first_cycle/last_cycle/
-   sample_pairs/data_bytes/payload_fnv1a`). Force-kill must not be required to
-   finalize the header.
-3. `-audiohash <cycles> <file>`: FNV-1a64 over the int16 PostSample stream up to
-   the target cycle, one `audio_fnv1a = <16hex>` line; may repeat for checkpoints.
-4. `-midiseq <file> [start]`: text schedule `<cycle> <hexbyte>...` with `#`
-   comments; cycles are relative to `start` (scripts pass `200000000`);
-   `MCU_PostUART` with ring backpressure (8192 B), no overwrite.
-5. `-mk2cpp-hand:0|1`: default `1`; `0` skips the hand table for the same-binary
-   A/B gate (W3 §5.3 gate 5).
-6. `-snapinfo <cycles> <file>`: `isr4fe`
-   heartbeat, `sleep`/`iml`/`pend`, `pcm.select_channel`, `pcm.irq_channel`,
-   `voice_mask` popcount, `pcm.ext_voices` (S4/O4, plan A per
-   `out/m4/12_cfg3d_voice_count.md` §4.3). `-hashdump` stays v1 (no new
-   fields) so the M1-M3 baselines remain comparable; `pcm.ext_voices` is not
-   added there. Optional: missing evidence is SKIP, not PASS.
-7. `-pcmtrace` extended coverage (G2): `pcm ext reg=.. val=.. pc=.. cyc=..` for
-   `PCM_WriteExt` and ext reads (`0xE820`). Optional: O5 works without it, but
-   O6/S6-ext/S7 are then SKIP.
-
-The project goal is **256 sounding voices**; the accepted oracle voice count is
-`-voices:255` (CLI range `28..255`) - the compromise cap forced by the `0xff`
-slot sentinel and the 8-bit pool counter, not the goal itself. The oracle never
-asks for `-voices:256` until that design change (D1) is approved.
-
-## Exit codes
-
-- `0` — all checks PASS/SKIP, or `-KeepGoing` was given.
-- `1` — at least one FAIL (without `-KeepGoing`).
-- `2` — setup error (missing exe/tracediff, invalid window).
-- M4 scripts: `0` = automated PASS or dry-run OK; `1` = at least one FAIL;
-  `2` = setup/gate error (`-RequireReady` with missing options, `-Execute`
-  without `-UserPresent`, or a required GT option missing).
-
-## Notes / caveats
-
-- The script sets `SDL_VIDEODRIVER=dummy`, `SDL_AUDIODRIVER=dummy`,
-  `SDL_RENDER_DRIVER=software` for headless determinism. The M4 scripts
-  deliberately do **not** reuse that mode.
-- With no generated code linked (no `-DMK2CPP_GEN_DIR`), `-mk2cpp` is pure
-  interpreter fallback and the expected result is PASS on every check.
-- Baseline traces are local fixtures; they live under `tools\baselines\` and
-  may be absent after cleanup. A missing fixture is reported as SKIP.
-- A completed trace is detected via the last `m <cycles>` line reaching the
-  window end; the `-hashdump` file must additionally exist and be non-empty.
-- Redirected streams are closed and the process is `Stop-Process -Force`d in a
-  `finally` block, so a hung GT cannot block the check indefinitely.
-
-## Known gaps (Wave 0c)
-
-- No real GT run was performed in this wave: the M4 scripts are dry-run
-  validated only. They need GT options G1/G2/G3/G5 (above) and the local corpus
-  before `-Execute` can pass its gate.
-- `-voices:256` remains a CLI cap decision (D1): the goal is 256 voices, but
-  the current compromise cap is `255` (`0xff` sentinel + 8-bit counter,
-  `out/m4/12_cfg3d_voice_count.md` §5.2); the oracle uses `255` until the
-  true-256 design change lands. If the cap is ever raised, `-VoiceLevels` and
-  the S4 expectation need revisiting.
-- D6 (`config_reg_3d` bit5 vs voice count) is resolved by plan A
-  (2026-09-11, `out/m4/12_cfg3d_voice_count.md`): extension levels must keep
-  `cfg3d=0x7b` and report `pcm.ext_voices=n` via `-snapinfo` (`-hashdump` stays
-  v1, unchanged for M1-M3 baseline compatibility). The scalar is parsed from
-  `-snapinfo`; when absent, S4/O4 parse as SKIP (never PASS).
-- The stock 300M-320M audio baseline freeze (G6) is **done**: the frozen dump
-  lives in `tools\baselines\m4_audio\` (local fixture, gitignored, SHA256SUMS.txt
-  verified; see `tools\baselines\README.md`). `m4_audio_null.py -CheckBaseline`
-  turns the n=28 null into a frozen-reference comparison. Refreeze (user
-  present) when the stock PCM/ROM path or the audio tap changes.
-- The `mk2cpp/README.md` tools directory table was not updated (write scope of
-  this wave was limited to `mk2cpp/tests/**` and `mk2cpp/tools/**`); add the
-  pcmdiff/midisched rows there separately.
+这是各脚本正常处理路径的退出约定；未捕获的 I/O/子进程异常不保证返回 2。
+Python 参数统一为 `--check-baseline`、`--require-ready`、`--execute` 等双横线小写写法；
+没有旧 PowerShell 的 `-KeepGoing`、`-CheckBaseline` 或 `-VoiceLevels` 参数。
