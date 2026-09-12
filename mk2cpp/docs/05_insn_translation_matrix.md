@@ -274,8 +274,8 @@ void op_write(Ctx& c, const Operand& o, uint32_t v) {        // :511-541
   （`src/mcu.cpp:663-856`）：page 0 off<0x8000=rom1；rom2 重排
   `address_rom = addr & 0x3ffff; if (addr & 0x80000) address_rom |= 0x40000;`
   （`:665-667`）；**读路径 page 取 `(address>>16)&0xf`**（`:668`），即 cp 高 4 位被忽略。
-- 写路径 page 映射与页 6/7 扩展见 `src/mcu.cpp:896-1069`；page6/7 仅在
-  `pcm_ext_enabled` 时 backing（`:843-850, 1057-1064`）。
+- 写路径 page 映射与页 6/7 扩展见 `src/mcu.cpp:896-1069`；page6/7 backing 属 M5
+  扩展（`pcm_ext_enabled`），已随 2026-09-11 回滚从 `src/` 移除。
 - SR：`sr_mask = 0x870f`（T=0x8000，int mask=0x700，N=0x08，Z=0x04，V=0x02，C=0x01；
   `src/mcu.h:90-98`）。`MCU_SetStatus(cond, mask)` 只改指定位（`src/mcu.h:332-338`）。
 - `setcommon(v, siz)`（`src/mcu_opcodes.cpp:675-687`）：

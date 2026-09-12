@@ -4,6 +4,10 @@
 必须逐位复刻的 GT 执行环境写清楚，使其与 `../src/`（GT，oracle）在相同 ROM、相同输入下
 **0 分歧**。本文只做规格描述，不改任何源码。
 
+> **回滚注记（2026-09-11）**：`pcm_ext_*`、page6/7 backing、0xE800 窗口、`-voices:`、
+> `PCM_WriteExt/ReadExt` 相关条目在 M5 回滚后已不在 `src/` 中；本文对应行保留为
+> M5 设计记录，不再代表当前实现。
+
 引用约定：
 
 - 所有行号均指仓库根下的 `src/`，写作 `src/mcu.cpp:668` 形式。
@@ -545,7 +549,7 @@ struct mcu_t {
   `mcu_button_pressed`（`src/mcu.cpp:206`）、`mcu_p0_data/mcu_p1_data`（`src/mcu.cpp:1556-1557`）、
   `master_gain`（`src/mcu.cpp:191`）。
 - 型号/功能全局：`romset`、`mcu_mk1/mcu_cm300/mcu_st/mcu_jv880/mcu_scb55/mcu_sc155`、
-  `pcm_float/pcm_ext_enabled/pcm_ext_voices/pcm_ext_active`（`src/mcu.cpp:156`、`:181-190`）。
+  `pcm_float`、`master_gain`（`pcm_ext_*` 已随 M5 回滚删除；`src/mcu.cpp` 顶部）。
 
 ## 8. 初始化顺序
 

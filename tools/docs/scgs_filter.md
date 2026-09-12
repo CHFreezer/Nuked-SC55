@@ -97,7 +97,13 @@ Differences that matter for the mk2 crackle:
   `g2 = B/64 ≥ 0` and `g1` near ±2, many patches are **unstable** → the state rings to
   full scale every sample. The VSTi's A/B are DLS-derived and kept in the stable range, so
   it needs no clamp. Per-add saturation (mk1) tames even the unstable case into a bounded
-  limit cycle — exactly what `-float` now does.
+  limit cycle — that is mk1's behaviour; `-float` now runs **unsaturated** (see the
+  2026-09-12 note below).
+
+> **2026-09-12 补注**：上面的 `g1² + 2·g1·g2 < 4` 是充分条件的近似；实测触发过的系数组
+> （g1=1.40625、g2=0.71875）极点 ≈ **-0.9991**，仍在单位圆内，属稳定的高 Q 谐振，不是
+> 异常。`-float` 现行为不饱和；修掉 `-gain` 溢出后实时试听无可闻爆音，以
+> `filter_float_port.md` 的状态更新为准。
 
 ## Reference value / limits
 

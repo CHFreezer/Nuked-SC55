@@ -29,14 +29,13 @@ static uint32_t mk2cpp_translated = 0;
 int mk2cpp_hand_enabled = 1;
 
 /* Capacity rationale (M4 out/11_slice2_pool_spec.md 4.4): L0 override tables are
- * per-PC, not per-routine. The first voice slice alone registers the whole
- * pool-init routine (127 executed PCs); the later voice closure is documented as
- * 26 logical routines / 41 fragments (mk2_polyphony_256 6.5 R11) and will need
- * thousands of L0 entries once every per-voice PC is owned. 4096 entries keep a
- * single sparse table without resizing; the entry is 32 bytes on x64, so the
- * static array is ~128 KiB BSS. Registration still fails fast on
- * overflow/duplicates. */
-#define MK2CPP_HAND_MAX 4096u
+ * per-PC, not per-routine. The voice closure (mk2_polyphony_256 6.5 R11) needs
+ * thousands of L0 entries once every per-voice PC is owned; the M4 translation
+ * used ~3k entries by 2026-09-12 and the remaining fragments still add more.
+ * 8192 entries keep a single sparse table without resizing; the entry is 32
+ * bytes on x64, so the static array is ~256 KiB BSS. Registration still fails
+ * fast on overflow/duplicates. */
+#define MK2CPP_HAND_MAX 8192u
 
 typedef struct {
     uint32_t  flat; /* (cp << 16) | pc */

@@ -21,6 +21,7 @@ completed trace window and then force-kills the process. It is pure PowerShell
 | `m4_audio_null.ps1` | n=28 audio null: stock vs `-mk2cpp`（`-voices:28` 已回滚为 no-op，等价默认 28；`[300M,320M)` WAV payload / `-audiohash` / state scalars）；可选 `-HandOff` 同二进制 A/B、`-CheckBaseline` 冻结基准门禁（G6） | only with `-Execute -UserPresent` |
 | `m4_stress_voices.ps1` | ~~n=32/64/128/255 矩阵（255 = 妥协上限，目标 256）~~ **暂缓**（`-voices:` 已回滚）；原 S1-S7 解析与 O1-O10 映射（`cfg3d=0x7b` + `pcm.ext_voices=n`）随 256 扩展暂缓 | 暂缓 |
 | `two_mode_check.ps1` | M1-M3 default-path regression (trace/hash, `SDL_*_DRIVER=dummy`) | headless by design, unchanged |
+| `gt_run.ps1` | Hard-timeout GT runner: starts the exe, waits for a hash/WAV-`.meta`/trace file, then force-kills it (GT never self-exits). Shared by tooling/debug, not a test oracle. | n/a (wrapper) |
 
 Hard boundaries for the M4 scripts:
 

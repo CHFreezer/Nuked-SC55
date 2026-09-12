@@ -809,6 +809,12 @@ void sub_mem_imm8(uint32_t addr, uint8_t imm)
     MCU_SUB_Common(value, imm, 0, 0);
 }
 
+void sub_mem_imm16(uint32_t addr, uint16_t imm)
+{
+    int32_t value = MCU_Read16(addr);
+    MCU_SUB_Common(value, imm, 0, 1);
+}
+
 void addq_r7(int delta)
 {
     mcu.r[7] = (uint16_t)MCU_ADD_Common(mcu.r[7], delta, 0, 1);
@@ -934,7 +940,7 @@ uint32_t routine_mask_tail_step(void)
     case 0x5492: load16(r1, ind_addr(0, (uint16_t)-2));        mcu.pc = 0x5495; break;
     case 0x5495: addq_r7(2);                                   mcu.pc = 0x5497; break;
     case 0x5497: load16(r0, dp_addr(0xd158));                  mcu.pc = 0x549b; break;
-    case 0x549b: movg_imm16(ind_addr(0, 0), 0x0018);           mcu.pc = 0x54a0; break;
+    case 0x549b: sub_mem_imm16(ind_addr(0, 0), 0x0018);        mcu.pc = 0x54a0; break;
     case 0x54a0: mcu.pc = (mcu.sr & STATUS_Z) ? 0x54a2 : 0x54aa; break;
     case 0x54a2: load16(r6, ind_addr(0, 6));                   mcu.pc = 0x54a5; break;
     case 0x54a5: store16(ind_addr(0, 0), r6);                  mcu.pc = 0x54a8; break;
@@ -942,7 +948,7 @@ uint32_t routine_mask_tail_step(void)
     case 0x54aa: clr8_mem(ind_addr(1, 0xad0e));                mcu.pc = 0x54ae; break;
     case 0x54ae: load16(r0, dp_addr(0xd15a));                  mcu.pc = 0x54b2; break;
     case 0x54b2: mcu.pc = (mcu.sr & STATUS_N) ? 0x51fc : 0x54b5; break;
-    case 0x54b5: movg_imm16(ind_addr(0, 0), 0x0018);           mcu.pc = 0x54ba; break;
+    case 0x54b5: sub_mem_imm16(ind_addr(0, 0), 0x0018);        mcu.pc = 0x54ba; break;
     case 0x54ba: mcu.pc = (mcu.sr & STATUS_Z) ? 0x54bc : 0x54c5; break;
     case 0x54bc: load16(r6, ind_addr(0, 6));                   mcu.pc = 0x54bf; break;
     case 0x54bf: store16(ind_addr(0, 0), r6);                  mcu.pc = 0x54c2; break;

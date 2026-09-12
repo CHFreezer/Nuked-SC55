@@ -5,11 +5,15 @@
 > 回滚到原版 28 复音实现。GT PCM 引擎地图（§1）与音频 tap（`-wav`/`-audiowin`/
 > `-audiohash`，仍保留）仍有效；扩展模式相关的 API 与"阶段 1 重定位等价"设计
 > **暂缓（里程碑拆分后归 M5）**，不依赖扩展的 stock-28 部分仍属 M4。
+>
+> **状态更新（2026-09-12）**：M4 voice 闭包翻译已完成（见 `00_plan.md` §M4）；
+> `-float` 最终为「归一化标量域、不逐加饱和」实现（`../tools/docs/filter_float_port.md`
+> 状态更新）；`native_pool`/`native_allocfree`/`voice_materialize`/`mask_acc` 全部逐指令接入。
 
 状态：已评审 v1，2026-09-11。
 配套文档：[07 voice 语义](07_m4_voice_spec.md) · [09 hand 覆盖表与集成](09_m4_integration.md) · [10 验收 oracle](10_m4_oracle.md) · [00 计划](00_plan.md)。
 阅读顺序：00_plan §M4 → 07 → **08（PCM/音频）** → 09 → 10。
-口径：目标 = **256 声同时发音**；验收上限 `-voices:255` 是 `0xff` 哨兵 + 8-bit 池计数妥协下的**阶段性上限，非最终目标**（07 §0.5、10 D1）；原生引擎在 `-mk2cpp` 下默认参与（含 n=28），`pcm_ext_active=1` 仅当 `-mk2cpp && -voices:n` 且 n≠28；前期 L0（一次 `MK2CPP_Step` = 一条 H8 指令）。
+口径：目标 = **256 声同时发音**；验收上限 `-voices:255` 是 `0xff` 哨兵 + 8-bit 池计数妥协下的**阶段性上限，非最终目标**（07 §0.5、10 D1）；原生引擎在 `-mk2cpp` 下默认参与（含 n=28），扩展激活（`pcm_ext_active=1` 仅当 `-mk2cpp && -voices:n` 且 n≠28）随 `pcm_ext_*`/`-voices:` 的 M5 回滚暂缓；前期 L0（一次 `MK2CPP_Step` = 一条 H8 指令）。
 
 范围：GT（`src/`）PCM 引擎地图 + 阶段 1 扩展点 + 音频输出链路 + `mk2cpp/src/hand/` 原生引擎 API。
 行号口径：评审基线 HEAD `84d3e51`（已含阶段 1 PCM 扩容）；引用行号在实现推进后可能漂移。旧文档（如 `mk2_polyphony_256.md` 的 `pcm.cpp:536/:1111/:1520`）行号已漂移，本文一律以评审基线重新核对。
@@ -24,7 +28,7 @@
 4. **阶段 1 的默认不变性靠"重定位等价"**：效果行 28..31 在所有模式下都搬到 `PCM_EFF_BASE=256..259`（`src/pcm.cpp:141-145`、`:38-41`），数组扩大到 260 槽；默认路径的寄存器语义、DSP 索引、`pcm_t` 布局在阶段 1 后冻结。默认 200M-202M trace 逐字节一致、EFF=256 vs 28 快照强等价（`polyphony_256_todo.md:173-183`）。
 5. **音频链路没有重采样、没有 wav/dump**：work_thread 产 int16 立体声帧 → `sample_buffer` 环形缓冲 → SDL 回调按 66207 Hz 消费（`src/mcu.cpp:1734-1741,1841-1861`）；回溯为空缓冲自旋（`:1430-1442`）。现有 CLI 只有 `-a:/ -ab:/ -gain:/ -float`，无任何录音能力（grep `argv`，`src/mcu.cpp:1946-2177`）。
 6. **最小音频抓取方案可行且低风险**：在 `MCU_PostSample` 钳位之后加 `-wav:<file>` 生产者侧 tap（增益/钳位后的真实 SDL 数据），默认零行为变化；n=28 null 测试即比对两个 WAV 的 PCM payload（sha256）。可行性见 §6。
-7. **M4 原生引擎分三步**（与 00_plan §M4 一致）：M4a 固件控制语义化（寄存器写→typed API）但仍用 GT DSP；M4b 逐行机械移植 DSP（保 20 位量化/`nfs`/浮点分支）并用 wav tap 做逐样本 diff；M4c 容量优化（**目标 256 声**；现行妥协上限 255，跳过 inactive voice、可选并行）。可观测契约是 `pcm_t` 全量镜像（hash/snapshot）+ `MCU_PostSample` 字节流（音频）+ `-pcmtrace`（控制写）。
+7. **M4 原生引擎分两步**（2026-09-12 修订）：M4a 固件控制语义化（寄存器写→typed API）但仍用 GT DSP——**DSP 即 `src/pcm.cpp` 的 C++ 芯片模型，无需移植，原 M4b 已作废**；M4c 容量优化（**目标 256 声**；现行妥协上限 255，跳过 inactive voice、可选并行）。可观测契约是 `pcm_t` 全量镜像（hash/snapshot）+ `MCU_PostSample` 字节流（音频）+ `-pcmtrace`（控制写）。
 8. **命名口径与设计冲突**：① **目标 256 声**；验收上限 `-voices:255` 是 `0xff` 哨兵 + 8-bit 计数的妥协上限（非目标；阶段 1 `PCM_MAX_VOICE=255`，voice 0..254，效果 256..259，数组 260；真 256 需数组 ≥264/EFF 260..263，见待定项）。② `config_reg_3d` 低 5 位当 voice 数、bit5 当波形 ROM bank 模式（`src/pcm.cpp:46-49`），扩展公式 `config+1` 会撞 bit5——**已解决（方案 A，2026-09-11，out/m4/12）**：扩展模式 `reg_slots = pcm_ext_active ? pcm_ext_voices : ((config&31)+1)`，`config_reg_3d` 保持 stock `0x7b`，诊断由 `-snapinfo` 新增 `pcm.ext_voices`，`-hashdump` 格式保持不变（见 §7 P1）。
 
 ---
@@ -319,15 +323,15 @@ M4a（控制语义化，先落地）
   翻译固件 → 寄存器写 ──(shim)──> 原生 typed Voice 状态 ──同步──> pcm.ram1/ram2 镜像
   DSP 仍用 GT PCM_Update（n=28 音频天然 0 差；n>28 走阶段 1 数组/掩码/EFF）
 
-M4b（DSP 机械移植）
-  Engine::update() 取代 GT PCM_Update 内层；逐行照抄 pcm.cpp:584-1677 的量化
-  每样本对拍：wav tap（默认路径 vs native 路径）+ pcm 镜像 hash
+M4b（已作废）
+  早期设想是把宿主 PCM 芯片模型搬进 hand；DSP 本就是 src/pcm.cpp 的 C++，
+  ROM 翻译不涉及它，故不再进行（2026-09-12）
 
 M4c（容量优化）
   inactive voice 跳过/批处理（须证明与全跑等价）；验到妥协上限 n=255 实时（目标 256 声）
 ```
 
-分期理由：M4a 先把"固件寄存器语义→原生状态"打通，用现成 DSP 保证 n=28 null；M4b 才引入数值重写的风险，并用 M4a 的镜像做 oracle。
+分期理由：M4a 先把"固件寄存器语义→原生状态"打通，用现成 DSP 保证 n=28 null；M4b（宿主 DSP 重写）已作废，不引入。
 
 ### 4.2 固件寄存器写/读 → 原生 voice API 映射
 
@@ -460,7 +464,7 @@ public:
 | R1 | **目标 256 声 vs 妥协上限 255**：`PCM_MAX_VOICE=255` 表示当前最多 255 voice（0..254），效果在 256..259，数组 260；`-voices:` 拒收 256（`mcu.cpp:1996-1999`） | 命名容易混淆 | 已统一：目标 256 声；验收上限 `-voices:255` 是 0xff 哨兵/8-bit 计数妥协（非目标，07 §0.5）；真 256 见 §7 待定项 |
 | R2 | **`config_reg_3d` 双用途**：bit0-4=voice 数−1（库存），bit5=波形 ROM bank 模式（`:46-49`）。扩展公式 `reg_slots=config+1` 在 bit5=0 的 n 区间（[29,32]∪[65,96]∪[129,160]∪[193,224]；"n≥33 撞 bit5" 的旧措辞有误，见 out/m4/12 §2.2）把 bit5 清 0，导致 waverom2 被当成 waverom3 等错读 | 扩展模式波形错乱 | **已解决（方案 A，2026-09-11）**：`reg_slots = pcm_ext_active ? pcm_ext_voices : ((config&31)+1)`，`config_reg_3d` 保持 stock `0x7b`；`rom2[0x1433]` config stamp 取消；诊断由 `-snapinfo` 加 `pcm.ext_voices`，`-hashdump` 格式保持不变（out/m4/12 §4） |
 | R3 | **调制源字段只有 5 位**（`ram2[7]&31`，`:1097,1221`）：voice ≥32 无法把自己的 slot 号写进该字段 | 大复音下自调制/互调制语义不可表达 | native Voice 存全宽 `pitch_src`；对固件镜像按需截断；确认固件是否读回该字段（`voice_memory_map.md` 显示只读 mirror，风险可能低，需证据） |
-| R4 | **DSP 机械移植的量化陷阱**：`addclip20` 进位入、`multi` 27 位回绕、`calc_tv` type/nfs 门控、`MOVG` 式 shift、`fstate` float 位型 | n=28 null 失败 | 逐行照抄（不要"优化"数学）；M4b 用逐样本 diff + 阶段 1 快照强等价做回归 |
+| R4 | **（已作废）DSP 机械移植的量化陷阱**：`addclip20` 进位入、`multi` 27 位回绕、`calc_tv` type/nfs 门控、`MOVG` 式 shift、`fstate` float 位型 | 仅独立重写宿主 DSP 时相关 | 不适用：现行方案 DSP 仍用 GT `PCM_Update`（2026-09-12） |
 | R5 | **性能**：256 voice×66207 Hz ≈ 16.9M voice-update/s（stock 1.85M/s，约 9×）；效果延迟 RAM 读写也在每步 | 长跑实时性/CPU 占空比 | M4c 先测基线；跳过 inactive voice（注意 inactive 分支每步清 `ram1[1/3/5]`、`fstate`、`ram2[8..10]`，须证明跳过等价），再考虑块处理 |
 | R6 | **音频背压与测试口径**：生产受 SDL 消费节流，空缓冲自旋（`:1430-1442`）；快照起点与 from-reset 轨迹有相位差（`04_cosim_spec.md:165-177`） | 长跑/对拍不稳定 | wav tap 放生产者侧；n=28 null 用同一快照/同窗口；避免跨相位直接比后缀 |
 | R7 | **原生扩展字段的持久化**：`pitch_src/key/[256]` 若不在 `pcm_t` 内，`state_save/hashdump` 看不到 | 长跑恢复后状态漂移、哈希盲区 | 优先全部状态落在 `pcm_t` 可表达字段（派生态）；否则新增 hand chunk + ABI 版本，或明确豁免场景（对齐 E3） |
@@ -490,7 +494,7 @@ public:
 |---|---|---|
 | P1 | `config_reg_3d` bit5 与 voice 数解耦后的对外表示（= 10 D6） | **已解决（方案 A，2026-09-11，out/m4/12 §4）**：`reg_slots = pcm_ext_active ? pcm_ext_voices : ((config&31)+1)`；GT 改动 `src/pcm.cpp:587` 一行，`rom2[0x1433]` config stamp 取消；`config_reg_3d` 保持 stock `0x7b`（bit5=ROM bank 模式）；`-snapinfo` 新增标量 `pcm.ext_voices = n`，`-hashdump` 格式保持不变（保 M1–M3 历史基线兼容）；O4/S4 新期望 = `cfg3d=0x7b`（状态 dump 可得）且 `ext_voices=n`（仅 `-snapinfo`；判据字段缺失时降级 SKIP）；快照 ABI 不变 |
 | P2 | 真 256 声是否/何时放开（`-voices:256`；= 10 D1） | **目标 256 声**；`-voices:255` 是 0xff 哨兵 + 8-bit 计数妥协上限，非目标（out/m4/12 §5.2）。放开 `-voices:256` 需替换哨兵表示/加宽计数/数组 ≥264/EFF 260..263 并改 CLI 上限 |
-| P3 | 调制源 5 位字段的全宽替代与固件回读语义（R3） | native `pitch_src` 存全宽；需确认固件是否读回该字段。out/m4/12 §5.1 已量化：素材化路径把 voice 自身 slot（P-0x02）OR 进 `ram2[7]` 低 5 位，n>28 时 GT 的 `&31`+`pcm_mod_slot` 会错位——不阻塞 slice-3 n=28 gate，留给 M4b 全宽 `pitch_src` |
+| P3 | 调制源 5 位字段的全宽替代与固件回读语义（R3） | native `pitch_src` 存全宽；需确认固件是否读回该字段。out/m4/12 §5.1 已量化：素材化路径把 voice 自身 slot（P-0x02）OR 进 `ram2[7]` 低 5 位，n>28 时 GT 的 `&31`+`pcm_mod_slot` 会错位——不阻塞 slice-3 n=28 gate，留给后续 native 全宽 `pitch_src`（不在当前范围） |
 | P4 | 原生扩展字段的持久化（`pitch_src/key/fstate` 等，R7） | 落 `pcm_t` 派生态、hand chunk + ABI 版本，或明确豁免场景 |
 | P5 | 是否新增独立 native 激活 flag（如 `mk2cpp_pcm_native`，R9） | 与 `pcm_ext_active`（激活条件已冻结）的关系 |
 | P6 | 效果命名置信度（R11）与 page6/7 快照缺口（R12） | 效果移植以逐行等价为准；hand 原生状态不入 page6 或补快照 chunk |

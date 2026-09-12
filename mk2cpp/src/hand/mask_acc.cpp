@@ -5,8 +5,9 @@
  * rom2 sha256 a4c9fd821059054c7e7681d61f49ce6f42ed2fe407a7ec1ba0dfdc9722582ce0
  * hand_rev 2
  *
- * Replaces the mask_acc loop block 0x1ada..0x1aea with one hand entry per
- * instruction. Each entry executes exactly one H8 instruction and returns 1,
+ * Replaces the whole mask_acc block 0x1ad3..0x1af1 (IML gate, loop seed, loop
+ * body, IML restore, rts) with one hand entry per instruction. Each entry
+ * executes exactly one H8 instruction and returns 1,
  * so the host keeps its per-instruction interrupt poll, TIMER_Clock, trace and
  * SM_Update cadence. The previous form was one L1 block returning 5*N (140):
  * a multi-instruction block defers the host tail, so -midiseq / real-time MIDI
@@ -19,22 +20,24 @@
  *   0c 07 00 48 59 00 1b f1 a4 b4 80 f1 ac f2 40 f1 ac f2 90
  *   f1 a4 b4 13 01 b9 ed 0c f8 ff 58 19
  *
- *   0x1ad3  BSET_ORC #0x0700 r0    IML=7      [stock/gen step, not registered]
- *   0x1ad7  movi r1 #0x001b        loop seed  [stock/gen step, not registered]
+ *   0x1ad3  BSET_ORC #0x0700 r0    SR |= 0x0700 (IML=7); ex_ignore=1
+ *   0x1ad7  movi r1 #0x001b        r1 = 0x1b; N=0 Z=0 V=0 C=0
  *   0x1ada  MOVG2 @r1+0xa4b4 r0    r0.lo = new[r1]        (byte; high byte kept)
  *   0x1ade  OR    @r1+0xacf2 r0    r0.lo |= acc[r1]       (GT OR <EA>,Rd)
  *   0x1ae2  MOVG3 r0 -> @r1+0xacf2 acc[r1] = r0.lo
  *   0x1ae6  CLR   @r1+0xa4b4       new[r1] = 0; N=0 Z=1 V=0 C=0
  *   0x1aea  cntjmp r1 -19          r1--; branch back while r1 != 0xffff
- *   0x1aed  BCLR_ANDC #0xf8ff r0   IML=0      [stock step: restores IML]
- *   0x1af1  rts                               [stock step]
+ *   0x1aed  BCLR_ANDC #0xf8ff r0   SR &= 0xf8ff (IML=0); ex_ignore=1
+ *   0x1af1  rts                    pc = pop
  *
- * Why the ORC/ANDC pair stays stock: 0x1ad3 and 0x1aed are the only SR /
- * ex_ignore boundaries; leaving them as gen single-instruction steps keeps
- * every IML change and ex_ignore effect on the stock cadence. The loop body
- * itself contains no SR write, no push/pop, no TRAPA/exception source (no T),
- * so per-PC stepping is exact; the flow_main three-run union has zero
- * IRQ/exception edges inside 0x1ad3-0x1af1 (out/m4/16 3.1).
+ * The head/tail PCs are registered as of 18_closure_gap 4.1 (P3). 0x1ad3 and
+ * 0x1aed are the only SR / ex_ignore boundaries; per-PC stepping is exact
+ * because each entry is one instruction and the flow_main three-run union has
+ * zero IRQ/exception edges inside 0x1ad3-0x1af1 (out/m4/16 3.1). The two SR
+ * writes are the gen transcription: MCU_ControlRegisterRead/Write(0,1) plus
+ * mcu.ex_ignore = 1, so the IML window and interrupt poll cadence are
+ * unchanged. The loop body itself contains no SR write, no push/pop, no
+ * TRAPA/exception source (no T).
  *
  * Data model: acc (acf2) and new (a4b4) stay authoritative in page-0 SRAM, so
  * the ROM readers keep working unchanged -- C9 0x2e83 reads/clears acf2 at
@@ -48,8 +51,9 @@
  * new[0] | acc[0], high byte preserved through the byte operations; flags are
  * the last CLR's (N=0 Z=1 V=0 C=0). pc = 0x1aed (cntjmp not taken).
  *
- * 0x1ad3/0x1ad7/0x1aed/0x1af1 are not registered here: generated code already
- * owns them (mk2cpp/src/gen/mk2c_r1.cpp) and this module must not shadow them.
+ * All nine PCs are registered here; generated code no longer owns any of
+ * 0x1ad3..0x1af1 (this module would otherwise shadow it, and duplicate
+ * registration is fatal in mk2cpp.cpp:113-117).
  */
 #include <stdint.h>
 
@@ -83,6 +87,20 @@ uint32_t maskacc_step(void)
 
     switch (mcu.pc)
     {
+    case 0x1ad3: /* BSET_ORC #0x0700 r0: SR |= 0x0700 (IML=7) */
+    {
+        uint32_t val = MCU_ControlRegisterRead(0, 1);
+        val |= 0x0700u;
+        MCU_ControlRegisterWrite(0, 1, val);
+        mcu.ex_ignore = 1;
+        mcu.pc = 0x1ad7;
+        break;
+    }
+    case 0x1ad7: /* movi r1 #0x001b: loop seed */
+        mcu.r[1] = 0x001b;
+        MCU_SetStatusCommon(0x001b, 1);
+        mcu.pc = 0x1ada;
+        break;
     case 0x1ada: /* MOVG2 @r1+0xa4b4 r0 */
     {
         uint8_t value = MCU_Read(ind_addr(1, 0xa4b4));
@@ -119,6 +137,18 @@ uint32_t maskacc_step(void)
         r1 = (uint16_t)(r1 - 1);
         mcu.pc = (r1 != 0xffff) ? 0x1adau : 0x1aedu;
         break;
+    case 0x1aed: /* BCLR_ANDC #0xf8ff r0: SR &= 0xf8ff (IML=0) */
+    {
+        uint32_t val = MCU_ControlRegisterRead(0, 1);
+        val &= 0xf8ffu;
+        MCU_ControlRegisterWrite(0, 1, val);
+        mcu.ex_ignore = 1;
+        mcu.pc = 0x1af1;
+        break;
+    }
+    case 0x1af1: /* rts */
+        mcu.pc = MCU_PopStack();
+        break;
     default: /* not in this block: execute the stock instruction once */
     {
         uint8_t op = MCU_ReadCodeAdvance();
@@ -129,9 +159,9 @@ uint32_t maskacc_step(void)
     return 1;
 }
 
-/* One entry per loop instruction (the entry PC of each). */
+/* One entry per instruction of the block (the entry PC of each). */
 const uint16_t kMaskAccPcs[] = {
-    0x1ada, 0x1ade, 0x1ae2, 0x1ae6, 0x1aea,
+    0x1ad3, 0x1ad7, 0x1ada, 0x1ade, 0x1ae2, 0x1ae6, 0x1aea, 0x1aed, 0x1af1,
 };
 
 } /* anonymous namespace */

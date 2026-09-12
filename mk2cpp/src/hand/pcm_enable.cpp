@@ -38,6 +38,8 @@
 #include "mcu_interrupt.h"
 #include "pcm.h"
 
+#include "hand_registry.h"
+
 #include "native_pool.h"
 
 /* Declared locally like the generated code does (defined in
@@ -135,6 +137,10 @@ void MK2CPP_HandFillTables(void)
     MK2CPP_PoolFillTables();
     void MK2CPP_VoiceMaterializeFillTables(void); MK2CPP_VoiceMaterializeFillTables(); /* voice_materialize.cpp (S1/S2) */
     void MK2CPP_MaskAccFillTables(void); MK2CPP_MaskAccFillTables(); /* mask_acc.cpp (B7) */
+
+    /* Self-registered modules (parallel safe): each hand module appends its
+     * fill function from a file-static initializer (hand_registry.h). */
+    mk2c::hand_fill_modules();
 }
 
 void MK2CPP_HandPostReset(void)

@@ -1847,7 +1847,7 @@ int SDLCALL work_thread(void* data)
             // (the main event dispatcher epilogue, i.e. completed dispatches).
             if (g_snapinfo_on && mcu.cp == 0x00 && mcu.pc == 0x04fe)
                 g_isr4fe++;
-            if (mk2cpp_enabled && MK2CPP_CanStep(((uint32_t)mcu.cp << 16) | mcu.pc))
+            if (mk2cpp_enabled)
                 MK2CPP_Step();
             else
                 MCU_ReadInstruction();

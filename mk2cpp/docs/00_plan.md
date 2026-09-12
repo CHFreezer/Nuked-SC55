@@ -1,8 +1,9 @@
 # mk2cpp 计划（M1–M5）
 
-状态：M1 ✅ M2 ✅ M3 ✅（2026-09-11，直译）；M4 语义化改写（stock 28）待重启；
-M5（256 复音扩展）已回滚暂缓（2026-09-11）。里程碑口径：M4 = ROM 全量 C++ 翻译的
-语义层收尾；M5 = 在翻译目标之外新增 256 复音能力的研究。
+状态：M1 ✅ M2 ✅ M3 ✅（2026-09-11，直译）；M4 语义化改写（stock 28）进行中
+（2026-09-12 主链完成并逐字节验证；voice 闭包尚待全量翻译）；M5（256 复音扩展）
+已回滚暂缓（2026-09-11）。里程碑口径：M4 = ROM 全量 C++ 翻译的语义层收尾；
+M5 = 在翻译目标之外新增 256 复音能力的研究。
 依据：`../tools/docs/`（证据协议、voice_memory_map、voice_bounds_inventory、
 task_irq_map、polyphony_256_todo）。
 
@@ -13,8 +14,8 @@ task_irq_map、polyphony_256_todo）。
   以宿主 API 复用，不重写行为）。
 - **终态**：GT 的 `-mk2cpp` 模式（`mk2cpp.h` 库）用翻译后的 C++ 跑同一 ROM 场景，
   行为与默认解释器模式等价。**当前聚焦原版 28 复音固件的 C++ 翻译**：
-  M1–M3 直译已达成；**M4** 对 voice/PCM 做语义化改写（stock 28，待重启），
-  完成全量翻译目标；**M5** 的 256 复音扩展是在此之上的独立能力研究，
+  M1–M3 直译已达成；**M4** 对 voice/PCM 做语义化改写（stock 28）进行中
+  （2026-09-12 主链完成，voice 闭包全量翻译待续）；**M5** 的 256 复音扩展是在此之上的独立能力研究，
   已于 2026-09-11 回滚暂缓（见 §2）。
   **不产出独立可执行程序。**
 
@@ -89,7 +90,27 @@ oracle：demo 200M 窗口 0 分歧；boot 3M 0 分歧。
 oracle：`s` 行 SM trace 与 GT 逐条一致（两模式 + 基线）；LCD 渲染与 GT 相同帧序列
 （`hash.lcd_state` 一致）。**已达成。**
 
-### M4 语义化改写（stock 28）— 待重启
+### M4 语义化改写（stock 28）— 闭包翻译完成（2026-09-12）
+
+**进度（2026-09-12）**：主链路与 voice 闭包例程已全部改写为手写 C++ 并逐指令接入，
+累计约 4100 个 PC 入口：pool-init/alloc-free（`native_pool`/`native_allocfree`）、
+note 物化链（`voice_materialize`）、mask_acc、PCM enable/disable（`pcm_enable`）、
+P0 分派簇（`pcm_dispatch`：IRQ0/voice_search/pcm_dispatcher）、note 链（`note_path`/
+`note_chain_tail`）、P1 杂项（`pcm_misc`：ts_scan/C9/r2d95/note_on_setup/irq、svc_math）、
+interp（`pcm_interp`）、0x4DE7 族（`dsp_rate`）、init/reset+d1ac（`reset_init`）、
+共享 helper 与碎片尾（`shared_misc`）。
+验证：55 秒 MIDI 整曲与 stock 逐字节一致（`-midiseq`，pcmdiff 0/7,282,760）；
+boot/demo 各窗口 trace+hash 与基线一致；多场景压力与休眠臂对拍一致；用户实时试听通过。
+
+**覆盖与剩余（2026-09-12）**：静态可达闭包全部 hand 化（`closure−gen−hand = 0`，
+hand 共 4239 PC）；闭包内 3 簇动态间接目标（interp `0x3A5A-0x3A9D`、pool 续段
+`0x4062B-0x406E2`、命令环 handler `0x625-0x673`，共 99 PC）已补译；
+**82/82 唯一 MIDI 曲目两模式逐字节 MATCH**（含 037/040 整曲与超长曲尾部，见
+`out/m4/29/31/32/37_*.md`）；剩 185 个闭包外动态 PC（14 簇：事件环 `a4d0/a7d0`、
+part 复位/参数、主事件循环回边等非 voice 子系统）与死字节/竞态不可达臂由 mixed 回退，
+既有 trace 两模式逐行一致（`out/m4/33_dynamic_class.md`）。快照审查
+（`out/m4/27_snapshot_status.md`）确认 hand 层无私有仿真状态，GT `state_save/load`
+已完整覆盖，无需 `MK2CPP_StateSave/Load`。
 
 > **里程碑拆分（2026-09-11）**：原 M4 把「voice/PCM 语义化改写」与「256 复音扩展」
 > 捆在一起。现拆分：**M4 = stock 28 的语义化改写，属 ROM 全量 C++ 翻译的收尾**；
@@ -102,8 +123,9 @@ oracle：`s` 行 SM trace 与 GT 逐条一致（两模式 + 基线）；LCD 渲�
 交付分层：
 - **M4a 控制语义化**：`src/hand/` 把 voice/PCM 控制路径原生化（固件寄存器写 →
   typed API/原生状态），DSP 仍用 GT `PCM_Update`；n=28 音频 null 先通过。
-- **M4b DSP 移植**：逐行机械移植 `PCM_Update` 定点步骤（20 位量化/`nfs`/浮点分支），
-  用音频 tap 做逐样本对拍。
+- **M4b DSP 移植**（已作废）：DSP 本身就是 GT `src/pcm.cpp` 的 C++ 芯片模型，
+  不是固件 ROM；"移植"只是早期 256/原生引擎路线下想把宿主模型搬进 hand，
+  现无必要（2026-09-12 标注）。
 
 切片顺序（详见 `09_m4_integration.md` §5.5；重启时按 stock 28 复核）：PCM enable/disable
 flush → pool-init → alloc/free（**slice-2**）→ per-voice materialize/PCM 写路径 → …；

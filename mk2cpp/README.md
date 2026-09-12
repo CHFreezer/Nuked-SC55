@@ -4,7 +4,14 @@
 库形式集成回 GT，替换原 H8 解释器行为**（开关控制、未翻译 PC 可回退），
 设备/调度/音频全部复用 GT。当前聚焦**原版 28 复音固件的 C++ 翻译**：M1–M3 直译
 （主 H8 + 子 MCU 全执行面）已达成，`-mk2cpp` 与默认解释器逐指令/逐状态等价。
-**M4 = voice/PCM 语义化改写（stock 28）**，属翻译目标收尾，待重启；
+**M4 = voice/PCM 语义化改写（stock 28），闭包翻译完成**：主链路与 voice 闭包例程
+（池/分配释放、note 物化与描述符链、P0 分派簇、ts_scan/C9、interp、0x4DE7 族、
+init/reset/d1ac、共享 helper、interp 间接目标、pool 续段、命令环 handler 等）
+已全部手写 C++ 并逐指令接入，累计 **4239 个 PC 入口**，静态可达闭包
+**closure−gen−hand = 0**（2026-09-12）；**82/82 唯一 MIDI 曲目两模式逐字节
+MATCH**（含 037/040 全曲），实时试听通过；剩 185 个闭包外动态 PC（事件环/part/
+主循环等非 voice 子系统）与死字节/竞态不可达臂由 mixed 回退；快照审查确认
+hand 无私有状态，无需 `MK2CPP_StateSave/Load`；
 **M5 = 256 复音扩展**（`pcm_ext_*`/`-voices:`/0xE800 窗口/page6-7/`PCM_MAX_VOICE`）
 是翻译目标之外的独立能力研究，已于 **2026-09-11 回滚暂缓**。
 **不做独立可执行程序。**
@@ -81,7 +88,7 @@ cmake --build build
 | M1 ✅ | `mk2cpp.h` 集成（`-mk2cpp` + 混合回退）+ h8lift（h8dec/h8part/h8emit）+ tracediff + cover + hashdump | **已达成（2026-09-11）**：9217 PC 注册；boot 0–3M 与 demo 200–202M 两模式 trace + 状态哈希 + 基准 trace 全部一致 |
 | M2 ✅ | 主固件全执行面翻译（含未执行可达路径） | **已达成（2026-09-11）**：15999 PC（9217 执行集 + 6782 可达新增）全译、0 stub（13 处 `TODO(gt)`）；boot+demo200 两模式 trace + 状态哈希与 M1 基线一致 |
 | M3 ✅ | 子 MCU 固件翻译（`smemit` 全译 rom_sm 4KB）+ SM/主 CPU 5× 时序对接 | **已达成（2026-09-11）**：4096 SM PC 全译；boot+demo200 两模式 `s` 行 SM trace 逐条一致、hashdump 与 M1 基线同哈希（含 `hash.sm`/`sm_ram`/`hash.lcd_state`）；执行集（45/251 PC）全落翻译区间 |
-| M4（待重启） | voice/PCM 语义化改写（stock 28；原 M4a 控制语义化 + M4b DSP 移植），完成 ROM 全量 C++ 翻译 | n=28 音频逐样本 null（`tests/m4_audio_null.ps1`，仍有效）；slice-2 见 `docs/11`（须按 stock 28 复核） |
+| M4（进行中） | voice/PCM 语义化改写（stock 28）：主链 `native_pool`/`native_allocfree`/`voice_materialize`/`mask_acc`/`pcm_enable`（1260 PC）已手写 C++；闭包剩余例程待翻译（见 `out/m4/18_closure_gap.md`，非可选） | 主链已达成（2026-09-12）：55s MIDI 整曲与 stock 逐字节一致（pcmdiff 0/7,282,760）、boot/demo trace+hash 与基线一致、试听通过；全量翻译进行中 |
 | M5（暂缓） | 256 复音扩展（**目标 256 声**；`pcm_ext_*`/`-voices:`/0xE800/page6-7；原 M4c 容量优化）——独立于翻译目标的能力研究 | 已回滚（2026-09-11）；`-voices:255` 压力矩阵（n=32/64/128/255，255 = 0xff 哨兵妥协上限，非目标）随扩展暂缓；设计记录 `docs/07–11` |
 
 详细设计见 `docs/00_plan.md`、`docs/01_architecture.md`、`docs/02_conventions.md`。

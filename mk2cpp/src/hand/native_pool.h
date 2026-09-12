@@ -2,7 +2,7 @@
  * HAND voice/native_pool -- voice pool initialization, per-PC entries.
  * rom1 sha256 8a1eb33c7599b746c0c50283e4349a1bb1773b5c0ec0e9661219bf6c067d2042
  * rom2 sha256 a4c9fd821059054c7e7681d61f49ce6f42ed2fe407a7ec1ba0dfdc9722582ce0
- * hand_rev 5
+ * hand_rev 6
  *
  * native_pool.cpp replaces the pool-init routine 0x40462-0x4062a with one hand
  * entry per instruction (each returns 1); round 7. The data model lives in

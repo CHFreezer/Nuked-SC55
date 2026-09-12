@@ -129,7 +129,10 @@ midisched <in.mid> [-o out.sched] [--start cycles] [--ppq N]
 - 输出：`<cycle> <hexbyte> [<hexbyte>...]` 文本 schedule，`#` 开头为注释；
   **cycle 相对 `-midiseq <file> [start]` 的 start**（`--start` 可再加常量）。
 - 字节节流：默认每个 MIDI 字节间隔 `--byte-gap 7680` cycles（320µs@24MHz），
-  防止 GT 8192B UART 环溢出；`--byte-gap 0` 时同一事件各字节合并为一行。
+  防止 GT 8192B UART 环溢出；字节按真实串口顺序串行发送（同一时刻的多条消息
+  整条依次发出，不再逐字节交错）；`--byte-gap 0` 时同一事件各字节合并为一行。
+- SysEx（F0/F7，含 GS Reset）原样保留并串行发送；早期版本会跳过 SysEx，导致
+  音色/鼓组设置丢失（乐器全错），已修（2026-09-12）。
 - 产物不入 git：schedule 放 `mk2cpp/out/m4/corpus/`（缺失时 M4 脚本 SKIP）。
 
 ## 约定

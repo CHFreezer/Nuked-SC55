@@ -3,7 +3,7 @@
  * instruction (M4, round 7).
  * rom1 sha256 8a1eb33c7599b746c0c50283e4349a1bb1773b5c0ec0e9661219bf6c067d2042
  * rom2 sha256 a4c9fd821059054c7e7681d61f49ce6f42ed2fe407a7ec1ba0dfdc9722582ce0
- * hand_rev 5
+ * hand_rev 6
  *
  * Replaces the rom2 pool-init routine 0x40462-0x4062a (pjsr from 0x565,
  * ret from 0x40586) with per-PC entries. Every registered PC executes exactly
@@ -22,6 +22,22 @@
  *   B 0x404b4..0x4061e 103  loop A tail, free/desc/part tables, helpers
  *   C 0x40621            1  MOVG #0xff -> r2++ (16x16 fill store)
  *   D 0x40624/27/2a      3  cntjmp r1 -6 / cntjmp r3 -48 / rts
+ *   E 0x4062b..0x40672  29  part descriptor scan (pjsr from 0x625)
+ *   F 0x40674..0x406e2  39  kill/release, rom2 variant of kill_a (pjsr 0x62a/0x660)
+ *
+ * E/F are the continuation of the pool-init family: the note/part command ring
+ * handlers 0x625 (state 08) / 0x62a (0a) / 0x660 (16) pjsr #0x04:0x062b /
+ * #0x04:0x0674. Both routines live at rom2 off 0x62b..0x6e2 and are taken over
+ * whole. 0x40673 and 0x4068d are mid-instruction bytes of the two-byte `ret`
+ * at 0x40672 and the `BMI 73` at 0x4068c, so the valid start set is
+ * 0x4062b..0x40672 + 0x40674..0x406e2. The tail 0x4068e..0x406e2 used to be
+ * owned by gen, but the 0x4068c BMI targets 0x406d7 inside it and the rest is
+ * its loop body; leaving it to gen would split routine F in the middle, so the
+ * whole segment is registered here (hand wins over gen in MK2CPP_Step). Both
+ * exits are `ret (pop cp,pc)` at 0x40672 / 0x406e2, matching the pjsr stack
+ * order. E walks the descriptor chain a220 -> a250 and the per-part a288/a314
+ * words; F is the rom2 twin of note_path.cpp B3 kill_a 0x1459..0x14a8
+ * (a288/a2a4/a2dc + a3bc/a4b4/a410 + 0xff fill).
  *
  * 0x40586 (ret, pops cp+pc) stays with the generated code, exactly like
  * before; 0x4062a's rts pops to it and the next dispatch runs it per-PC.
@@ -219,10 +235,44 @@ void btsti0(uint32_t addr)
     MCU_SetStatus((MCU_Read(addr) & 1u) == 0, STATUS_Z);
 }
 
+/* TST @addr (byte) / TST rN (word): N/Z/V from the value, C = 0. */
+void tst8(uint32_t addr)
+{
+    MCU_SetStatusCommon(MCU_Read(addr), 0);
+    MCU_SetStatus(0, STATUS_C);
+}
+
+void tst16(uint16_t value)
+{
+    MCU_SetStatusCommon(value, 1);
+    MCU_SetStatus(0, STATUS_C);
+}
+
+/* EXTU rN (aN 12): zero-extend the low byte; N/V/C = 0, Z from the result. */
+void extu8(uint16_t &reg)
+{
+    uint8_t data = (uint8_t)reg;
+    reg = data;
+    MCU_SetStatus(0, STATUS_N);
+    MCU_SetStatus(data == 0, STATUS_Z);
+    MCU_SetStatus(0, STATUS_V);
+    MCU_SetStatus(0, STATUS_C);
+}
+
+/* `ret (pop cp,pc)` (0x11 0x19): pop cp first, then pc, like GT
+ * MCU_Jump_JMP (src/mcu_opcodes.cpp:345). */
+void ret_cp_pc(void)
+{
+    mcu.cp = (uint8_t)MCU_PopStack();
+    mcu.pc = MCU_PopStack();
+}
+
 /* Conditional branch targets (GT MCU_Jump_Bcc, src/mcu_opcodes.cpp:231). */
 uint16_t bpl_pool(uint16_t taken, uint16_t fall) { return (mcu.sr & STATUS_N) ? fall : taken; }
 uint16_t bcc_pool(uint16_t taken, uint16_t fall) { return (mcu.sr & STATUS_C) ? fall : taken; }
 uint16_t beq_pool(uint16_t taken, uint16_t fall) { return (mcu.sr & STATUS_Z) ? taken : fall; }
+uint16_t bmi_pool(uint16_t taken, uint16_t fall) { return (mcu.sr & STATUS_N) ? taken : fall; }
+uint16_t bne_pool(uint16_t taken, uint16_t fall) { return (mcu.sr & STATUS_Z) ? fall : taken; }
 
 /* Effective addresses: @rN+disp through dp (r0-r3), ep (r4/r5), tp (r6/r7);
  * (dp,addr16) absolute. Same pages the interpreter uses. */
@@ -459,6 +509,133 @@ uint32_t step_pool_init_d(void)
     return 1;
 }
 
+/* ---- E 0x4062b..0x40672: part descriptor scan ---------------------------- */
+
+uint32_t step_pool_scan_e(void)
+{
+    uint16_t &r0 = mcu.r[0];
+    uint16_t &r1 = mcu.r[1];
+    uint16_t &r2 = mcu.r[2];
+    uint16_t &r4 = mcu.r[4];
+    uint16_t &r5 = mcu.r[5];
+
+    switch (mcu.pc)
+    {
+    case 0x062b: r2 = 0; flags_clr();                        mcu.pc = 0x062d; break;
+    case 0x062d: load8(r2, ind_addr(3, 0xa220));            mcu.pc = 0x0631; break;
+    case 0x0631: mcu.pc = bmi_pool(0x0672, 0x0633); break;
+    case 0x0633: r0 = mcu.r[3]; MCU_SetStatusCommon(mcu.r[3], 1);
+                                                            mcu.pc = 0x0635; break;
+    case 0x0635: shll8(r0);                                 mcu.pc = 0x0637; break;
+    case 0x0637: shll8(r0);                                 mcu.pc = 0x0639; break;
+    case 0x0639: shll8(r0);                                 mcu.pc = 0x063b; break;
+    case 0x063b: shll8(r0);                                 mcu.pc = 0x063d; break;
+    case 0x063d: r0 = (uint16_t)MCU_ADD_Common(r0, 0xa090, 0, 1);
+                                                            mcu.pc = 0x0641; break;
+    case 0x0641: r5 = r0; MCU_SetStatusCommon(r0, 1);       mcu.pc = 0x0643; break;
+    case 0x0643: (void)MCU_SUB_Common((int32_t)MCU_Read(ind_addr(2, 0xa288)), 0, 0, 0);
+                                                            mcu.pc = 0x0648; break;
+    case 0x0648: mcu.pc = bne_pool(0x066c, 0x064a); break;
+    case 0x064a: load8(r1, ind_addr(2, 0xa314));            mcu.pc = 0x064e; break;
+    case 0x064e: movi(r4, 0x000f);                          mcu.pc = 0x0651; break;
+    case 0x0651: r0 = r5; MCU_SetStatusCommon(r5, 1);       mcu.pc = 0x0653; break;
+    case 0x0653: tst8(ind_addr(0, 0));                      mcu.pc = 0x0655; break;
+    case 0x0655: mcu.pc = bmi_pool(0x0665, 0x0657); break;
+    case 0x0657: { uint32_t addr = ind_addr(0, 0);
+                   r0 = (uint16_t)(r0 + 1);
+                   (void)MCU_SUB_Common((int32_t)r1, (int32_t)MCU_Read(addr), 0, 0); }
+                                                            mcu.pc = 0x0659; break;
+    case 0x0659: mcu.pc = beq_pool(0x0667, 0x065b); break;
+    case 0x065b: r4 = (uint16_t)MCU_SUB_Common(r4, 0x0001, 0, 1);
+                                                            mcu.pc = 0x065f; break;
+    case 0x065f: tst16(r4);                                 mcu.pc = 0x0661; break;
+    case 0x0661: mcu.pc = bmi_pool(0x066c, 0x0663); break;
+    case 0x0663: mcu.pc = 0x0653; break;
+    case 0x0665: { uint32_t addr = ind_addr(0, 0);
+                   r0 = (uint16_t)(r0 + 1);
+                   MCU_Write(addr, (uint8_t)r1);
+                   MCU_SetStatusCommon((uint8_t)r1, 0); }
+                                                            mcu.pc = 0x0667; break;
+    case 0x0667: r4 = (uint16_t)(r4 - 1);
+                 mcu.pc = (r4 != 0xffff) ? 0x066cu : 0x066au; break;
+    case 0x066a: mcu.pc = 0x0672; break;
+    case 0x066c: load8(r2, ind_addr(2, 0xa250));            mcu.pc = 0x0670; break;
+    case 0x0670: mcu.pc = bpl_pool(0x0643, 0x0672); break;
+    case 0x0672: ret_cp_pc(); break;
+    default: stock_instruction(); break;
+    }
+    return 1;
+}
+
+/* ---- F 0x40674..0x406e2: kill/release (rom2 kill_a twin) ------------------ */
+
+uint32_t step_pool_kill_f(void)
+{
+    uint16_t &r0 = mcu.r[0];
+    uint16_t &r1 = mcu.r[1];
+    uint16_t &r2 = mcu.r[2];
+    uint16_t &r4 = mcu.r[4];
+    uint16_t &r5 = mcu.r[5];
+
+    switch (mcu.pc)
+    {
+    case 0x0674: extu8(mcu.r[3]);                           mcu.pc = 0x0676; break;
+    case 0x0676: r0 = mcu.r[3]; MCU_SetStatusCommon(mcu.r[3], 1);
+                                                            mcu.pc = 0x0678; break;
+    case 0x0678: shll8(r0);                                 mcu.pc = 0x067a; break;
+    case 0x067a: shll8(r0);                                 mcu.pc = 0x067c; break;
+    case 0x067c: shll8(r0);                                 mcu.pc = 0x067e; break;
+    case 0x067e: shll8(r0);                                 mcu.pc = 0x0680; break;
+    case 0x0680: r0 = (uint16_t)MCU_ADD_Common(r0, 0xa090, 0, 1);
+                                                            mcu.pc = 0x0684; break;
+    case 0x0684: r4 = r0; MCU_SetStatusCommon(r0, 1);       mcu.pc = 0x0686; break;
+    case 0x0686: r2 = 0; flags_clr();                        mcu.pc = 0x0688; break;
+    case 0x0688: load8(r2, ind_addr(3, 0xa220));            mcu.pc = 0x068c; break;
+    case 0x068c: mcu.pc = bmi_pool(0x06d7, 0x068e); break;
+    case 0x068e: (void)MCU_SUB_Common((int32_t)MCU_Read(ind_addr(2, 0xa288)), 0x02, 0, 0);
+                                                            mcu.pc = 0x0693; break;
+    case 0x0693: mcu.pc = bne_pool(0x06d1, 0x0695); break;
+    case 0x0695: movi(r1, 0x000f);                          mcu.pc = 0x0698; break;
+    case 0x0698: r0 = r4; MCU_SetStatusCommon(r4, 1);       mcu.pc = 0x069a; break;
+    case 0x069a: tst8(ind_addr(0, 0));                      mcu.pc = 0x069c; break;
+    case 0x069c: mcu.pc = bmi_pool(0x06d1, 0x069e); break;
+    case 0x069e: { uint32_t addr = ind_addr(0, 0);
+                   r0 = (uint16_t)(r0 + 1);
+                   load8(r5, addr); }
+                                                            mcu.pc = 0x06a0; break;
+    case 0x06a0: (void)MCU_SUB_Common((int32_t)r5, (int32_t)MCU_Read(ind_addr(2, 0xa314)), 0, 0);
+                                                            mcu.pc = 0x06a4; break;
+    case 0x06a4: mcu.pc = beq_pool(0x06ab, 0x06a6); break;
+    case 0x06a6: r1 = (uint16_t)(r1 - 1);
+                 mcu.pc = (r1 != 0xffff) ? 0x069au : 0x06a9u; break;
+    case 0x06a9: mcu.pc = 0x06d7; break;
+    case 0x06ab: btsti0(ind_addr(2, 0xa2a4));               mcu.pc = 0x06af; break;
+    case 0x06af: mcu.pc = bne_pool(0x06d1, 0x06b1); break;
+    case 0x06b1: load8(r1, ind_addr(2, 0xa2dc));            mcu.pc = 0x06b5; break;
+    case 0x06b5: extu8(r1);                                 mcu.pc = 0x06b7; break;
+    case 0x06b7: mov_imm8(ind_addr(1, 0xa3bc), 0x01);       mcu.pc = 0x06bc; break;
+    case 0x06bc: mov_imm8(ind_addr(1, 0xa4b4), 0xff);       mcu.pc = 0x06c1; break;
+    case 0x06c1: load8(r1, ind_addr(1, 0xa410));            mcu.pc = 0x06c5; break;
+    case 0x06c5: mcu.pc = bmi_pool(0x06d1, 0x06c7); break;
+    case 0x06c7: mov_imm8(ind_addr(1, 0xa3bc), 0x01);       mcu.pc = 0x06cc; break;
+    case 0x06cc: mov_imm8(ind_addr(1, 0xa4b4), 0xff);       mcu.pc = 0x06d1; break;
+    case 0x06d1: load8(r2, ind_addr(2, 0xa250));            mcu.pc = 0x06d5; break;
+    case 0x06d5: mcu.pc = bpl_pool(0x068e, 0x06d7); break;
+    case 0x06d7: movi(r1, 0x000f);                          mcu.pc = 0x06da; break;
+    case 0x06da: r0 = r4; MCU_SetStatusCommon(r4, 1);       mcu.pc = 0x06dc; break;
+    case 0x06dc: { uint32_t addr = ind_addr(0, 0);
+                   r0 = (uint16_t)(r0 + 1);
+                   MCU_Write(addr, 0xff);
+                   MCU_SetStatusCommon(0xff, 0); }
+                                                            mcu.pc = 0x06df; break;
+    case 0x06df: r1 = (uint16_t)(r1 - 1);
+                 mcu.pc = (r1 != 0xffff) ? 0x06dcu : 0x06e2u; break;
+    case 0x06e2: ret_cp_pc(); break;
+    default: stock_instruction(); break;
+    }
+    return 1;
+}
+
 /* ---- PC tables (rom2 offsets; the flat key adds cp 4) --------------------- */
 
 const uint16_t kPoolInitAPcs[] = {
@@ -485,6 +662,23 @@ const uint16_t kPoolInitBPcs[] = {
 
 const uint16_t kPoolInitDPcs[] = {
     0x0624, 0x0627, 0x062a,
+};
+
+const uint16_t kPoolScanEPcs[] = {
+    0x062b, 0x062d, 0x0631, 0x0633, 0x0635, 0x0637, 0x0639, 0x063b,
+    0x063d, 0x0641, 0x0643, 0x0648, 0x064a, 0x064e, 0x0651, 0x0653,
+    0x0655, 0x0657, 0x0659, 0x065b, 0x065f, 0x0661, 0x0663, 0x0665,
+    0x0667, 0x066a, 0x066c, 0x0670, 0x0672,
+};
+
+/* 0x4068e..0x406e2 are also in the gen table; the hand entry wins in
+ * MK2CPP_Step, which keeps routine F from being split at 0x4068d. */
+const uint16_t kPoolKillFPcs[] = {
+    0x0674, 0x0676, 0x0678, 0x067a, 0x067c, 0x067e, 0x0680, 0x0684,
+    0x0686, 0x0688, 0x068c, 0x068e, 0x0693, 0x0695, 0x0698, 0x069a,
+    0x069c, 0x069e, 0x06a0, 0x06a4, 0x06a6, 0x06a9, 0x06ab, 0x06af,
+    0x06b1, 0x06b5, 0x06b7, 0x06bc, 0x06c1, 0x06c5, 0x06c7, 0x06cc,
+    0x06d1, 0x06d5, 0x06d7, 0x06da, 0x06dc, 0x06df, 0x06e2,
 };
 
 } /* anonymous namespace */
@@ -523,6 +717,12 @@ void MK2CPP_PoolFillTables(void)
     register_pool_pcs(mk2c::kPoolInitDPcs,
                       (uint32_t)(sizeof(mk2c::kPoolInitDPcs) / sizeof(mk2c::kPoolInitDPcs[0])),
                       &mk2c::step_pool_init_d);
+    register_pool_pcs(mk2c::kPoolScanEPcs,
+                      (uint32_t)(sizeof(mk2c::kPoolScanEPcs) / sizeof(mk2c::kPoolScanEPcs[0])),
+                      &mk2c::step_pool_scan_e);
+    register_pool_pcs(mk2c::kPoolKillFPcs,
+                      (uint32_t)(sizeof(mk2c::kPoolKillFPcs) / sizeof(mk2c::kPoolKillFPcs[0])),
+                      &mk2c::step_pool_kill_f);
 
     /* Whole-routine alloc/free hooks (native_allocfree.cpp). */
     MK2CPP_AllocFreeFillTables();

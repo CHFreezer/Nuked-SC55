@@ -187,11 +187,11 @@ mk2cpp.exe -mk2 [-headless] [-deterministic]
            [-tracepc <file> [start end]]
            [-hash-every <cycles> -hashfile <file>]
            [-demo [cycles]] [-mocknote [cycles]] [-pcmtrace]
-           [-voices:<n>] [-float]
+           [-float] [-gain:<amount>]
 ```
 
-- `-tracepc` / `-loadsnap` / `-demo` / `-mocknote` / `-voices:` / `-float` / `-pcmtrace`
-  与 GT 同义同格式。
+- `-tracepc` / `-loadsnap` / `-demo` / `-mocknote` / `-float` / `-gain:` / `-pcmtrace`
+  与 GT 同义同格式（`-voices:` 已随 M5 回滚）。
 - `-snapfile` 仅为替代 GT 的固定名；未给时也必须落 `demo_snap.bin`。
 - `-hash-every N -hashfile f`：每 N cycles 写一行
   `H <cycles> <cp:pc> <sr> <fnv64(mcu)> <fnv64(sram)> <fnv64(dev)> <fnv64(sm)> <fnv64(pcm)> <fnv64(lcd)>`
@@ -442,7 +442,7 @@ uint8_t sram[0x8000]; ... }`，所有函数加 `machine_t&` 参数；SDL 与文�
 
 ## 4. 测试语料（Corpus）
 
-所有场景默认 `ROM_SET_MK2`、`-float` 关闭、`-voices:28`（stock）。路径
+所有场景默认 `ROM_SET_MK2`、`-float`/`-gain:` 关闭（stock）。路径
 `$OUT = mk2cpp\out\cosim`；fixture 引用 `tools/baselines/`。
 
 ### 4.1 场景表
@@ -464,9 +464,9 @@ uint8_t sram[0x8000]; ... }`，所有函数加 `machine_t&` 参数；SDL 与文�
 |---|---|---|---|
 | E1 | IRQ 相位抖动 | S1 窗口 + online lockstep | 每步 cycles/sr 相等；无 L3 相位漂移 |
 | E2 | UART 半字节在途 | S3 + 快照任意时刻 | 内部完整快照恢复后逐字节一致（验证 §3.3 的隐藏态补齐） |
-| E3 | page6/7 | `-voices:32`（M4） | 快照补 `PAGE67` chunk；**当前 GT 快照丢 page6/7**（`src/mcu.cpp:657-658` 不在 `state_save`），M4 前必须解决或禁用该场景 |
+| E3 | page6/7 | ~~`-voices:32`~~（M5 回滚后不适用） | 快照补 `PAGE67` chunk；**当前 GT 快照丢 page6/7**（`src/mcu.cpp:657-658` 不在 `state_save`），M4 前必须解决或禁用该场景 |
 | E4 | 长睡眠/定时器翻转 | S2 | 无复位，心跳计数单调增长 |
-| E5 | `-voices:48` 历史 stall | M4 回归 | 失败签名 `pc=00:037A`、`iml=7`（`task_irq_map.md:504`） |
+| E5 | ~~`-voices:48` 历史 stall~~（M5 回滚后不适用） | 归档 | 失败签名 `pc=00:037A`、`iml=7`（`task_irq_map.md:504`） |
 
 ### 4.3 Fixture 再生
 

@@ -221,7 +221,7 @@ endif()
 
 # Committed native mk2cpp hand implementations (M4). The directory is empty by
 # default; an empty glob keeps the build identical to M1-M3.
-file(GLOB MK2CPP_HAND_SRC "${CMAKE_CURRENT_SOURCE_DIR}/mk2cpp/src/hand/*.cpp")
+file(GLOB MK2CPP_HAND_SRC CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/mk2cpp/src/hand/*.cpp")
 if(MK2CPP_HAND_SRC)
     list(APPEND SC55_SRC ${MK2CPP_HAND_SRC})
 endif()
