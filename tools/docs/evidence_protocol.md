@@ -7,7 +7,7 @@
 
 **只提交文档与代码。ROM 及其派生的一切产物一律不入 git**（版权风险）。
 - 忽略规则：`tools/`、`mk2cpp/` 等**已入库公开目录**内部的派生/调试产物规则
-  写在公开 `.gitignore`（`tools/baselines/*`、`tools/python/*`、`*.exe`、
+  写在公开 `.gitignore`（`tools/baselines/*`、`*.exe`、
   `mk2cpp/out/`、`mk2cpp/src/gen/` 等），随仓库共享；这些目录名已公开，不构成
   额外信息。
 - **不得在任何公开文件（md、`.gitignore` 注释、提交信息、代码注释）中写出

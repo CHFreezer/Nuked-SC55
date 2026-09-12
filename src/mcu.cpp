@@ -2365,6 +2365,7 @@ int main(int argc, char *argv[])
     int pageSize = 512;
     int pageNum = 32;
     bool autodetect = true;
+    bool nomidi = false;
     ResetType resetType = ResetType::NONE;
 
     romset = ROM_SET_MK2;
@@ -2375,6 +2376,10 @@ int main(int argc, char *argv[])
             if (!strncmp(argv[i], "-p:", 3))
             {
                 port = atoi(argv[i] + 3);
+            }
+            else if (!strcmp(argv[i], "-nomidi"))
+            {
+                nomidi = true;
             }
             else if (!strncmp(argv[i], "-a:", 3))
             {
@@ -2607,6 +2612,8 @@ int main(int argc, char *argv[])
                 printf("\n");
                 printf("MIDI / audio:\n");
                 printf("  -p:<port_number>               Set MIDI port.\n");
+        printf("  -nomidi                        Do not open the host MIDI input; keeps oracle\n"
+               "                                 runs deterministic (no external bytes injected).\n");
                 printf("  -a:<device_number>             Set Audio Device index.\n");
                 printf("  -ab:<page_size>:[page_count]   Set Audio Buffer size.\n");
                 printf("  -gain:<amount>                 Set overall output volume: a linear multiplier\n"
@@ -2995,7 +3002,11 @@ int main(int argc, char *argv[])
         return 2;
     }
 
-    if(!MIDI_Init(port))
+    if (nomidi)
+    {
+        printf("MIDI input disabled (-nomidi)\n");
+    }
+    else if(!MIDI_Init(port))
     {
         fprintf(stderr, "ERROR: Failed to initialize the MIDI Input.\nWARNING: Continuing without MIDI Input...\n");
         fflush(stderr);

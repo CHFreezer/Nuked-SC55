@@ -70,8 +70,8 @@ smemit.exe <rom_sm.bin> <outdir> [--extra <pc-list.txt>]
   handler 路径实际取指字节数，并逐条与 `tools/disasm/smdasm.c` 的完整 M37450
   寻址模式表交叉校验；同时校验 `smemit.c` 的 `emit_body`/load/store 表达式
   覆盖与实现集完全一致。生成后自带校验（在仓库根执行）：
-  `tools/python/python.exe mk2cpp/tools/h8lift/sm_parse.py --check mk2cpp/tools/h8lift/smemit.c`
-  （仓库内嵌解释器说明见 `tools/python/README.md`；无内嵌运行时则用系统 Python 3）。
+  `python3 mk2cpp/tools/h8lift/sm_parse.py --check mk2cpp/tools/h8lift/smemit.c`
+  （用你自己的 Python 3 解释器；本机路径见 `local.md`）。
   `--extra` 可并入额外 PC（如 `tools/baselines/pc_sm_251.txt`），但仅限
   `[0xf000,0xffff]` 区间。
 

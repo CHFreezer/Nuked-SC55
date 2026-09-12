@@ -84,9 +84,7 @@ CMakeSettings.json
 /assets/
 # tools/ and mk2cpp/ are already public trees: generated/fixture artifacts
 # inside them are ignored here, so every contributor shares the rules.
-# keep the folders, ignore their contents except the tracked README note
-tools/python/*
-!tools/python/README.md
+# keep the folder, ignore fixture contents except the tracked README note
 tools/baselines/*
 !tools/baselines/README.md
 

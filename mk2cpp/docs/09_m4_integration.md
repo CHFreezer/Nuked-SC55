@@ -165,7 +165,7 @@ voice 语义（pool/alloc/free）见 07，PCM enable/mask/编程路径见 08。
   **全仓库没有任何消费点**（无启动/退出打印、无 per-PC 直方图）。
 - 打印内容只有 Init 的注册计数（`mk2cpp.cpp:141-146`）。
 - `mk2cpp_mixed` 无 CLI 开关，永远为 1。
-- 两模式回归脚本：`mk2cpp/tests/two_mode_check.ps1`（默认解释器 vs `-mk2cpp`，
+- 两模式回归脚本：`mk2cpp/tests/two_mode_check.py`（跨平台；原 `.ps1` 已移植删除）（默认解释器 vs `-mk2cpp`，
   trace + hashdump 对照）。
 
 ### 1.8 每步语义契约（hand 必须遵守）

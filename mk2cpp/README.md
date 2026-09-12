@@ -4,14 +4,23 @@
 库形式集成回 GT，替换原 H8 解释器行为**（开关控制、未翻译 PC 可回退），
 设备/调度/音频全部复用 GT。当前聚焦**原版 28 复音固件的 C++ 翻译**：M1–M3 直译
 （主 H8 + 子 MCU 全执行面）已达成，`-mk2cpp` 与默认解释器逐指令/逐状态等价。
-**M4 = voice/PCM 语义化改写（stock 28），闭包翻译完成**：主链路与 voice 闭包例程
-（池/分配释放、note 物化与描述符链、P0 分派簇、ts_scan/C9、interp、0x4DE7 族、
-init/reset/d1ac、共享 helper、interp 间接目标、pool 续段、命令环 handler 等）
-已全部手写 C++ 并逐指令接入，累计 **4239 个 PC 入口**，静态可达闭包
-**closure−gen−hand = 0**（2026-09-12）；**82/82 唯一 MIDI 曲目两模式逐字节
-MATCH**（含 037/040 全曲），实时试听通过；剩 185 个闭包外动态 PC（事件环/part/
-主循环等非 voice 子系统）与死字节/竞态不可达臂由 mixed 回退；快照审查确认
-hand 无私有状态，无需 `MK2CPP_StateSave/Load`；
+**M4 = voice/PCM 语义化改写（stock 28），覆盖完成、语义化进行中**：主链路与
+voice 闭包例程（池/分配释放、note 物化与描述符链、P0 分派簇、ts_scan/C9、interp、
+0x4DE7 族、init/reset/d1ac、共享 helper、interp 间接目标、pool 续段、命令环
+handler 等）已接入 **4239 个 PC 入口**，静态可达闭包 **closure−gen−hand = 0**
+（2026-09-12）；**指定回归曲 = 037**（外部 MIDI，覆盖绝大部分行为），扩展覆盖
+（代理侧一次性，非默认）为 82/82 唯一 MIDI 曲目两模式逐字节 MATCH（见
+`out/m4/41_full_regression.md`）；
+剩 185 个闭包外动态 PC（事件环/part/主循环等非 voice 子系统）与死字节/竞态
+不可达臂由 mixed 回退。**覆盖 ≠ 语义化**：当前 `src/hand/` 主体是
+`switch (mcu.pc)` + `case 0x....` 的逐指令直译（32.4k 行 / 4,232 case，
+可核对等价、不可当语义代码阅读），尚未达到本工程"人类可读语义 C++"的目标；
+M4 收口还需：(1) 宿主指令边界回调（支撑整例程语义写法且不破坏中断/MIDI
+时序）；(2) 语义重写（`pcm_misc.cpp` 13.9k 行垃圾桶已于 2026-09-12 拆分为
+`pcm_irq_service`/`pcm_fraction_div`/`note_on_setup`/`pitch_env`/`voice_param`/
+`ts_scan`/`cmd_ring` 七个 ROM 例程模块；其余模块命名审计与全量语义重写待做）；
+(3) 正式验收 oracle（n=28 音频 null + 用户在场试听，未执行）。
+快照审查确认 hand 无私有状态，无需 `MK2CPP_StateSave/Load`；
 **M5 = 256 复音扩展**（`pcm_ext_*`/`-voices:`/0xE800 窗口/page6-7/`PCM_MAX_VOICE`）
 是翻译目标之外的独立能力研究，已于 **2026-09-11 回滚暂缓**。
 **不做独立可执行程序。**
@@ -77,8 +86,19 @@ cmake --build build
    `mk2cpp/build/` 由通用 `build/` 规则命中）。
 3. **等价性**：M1–M3 期间，同一输入下 `-mk2cpp` 模式与默认解释器模式必须逐指令/逐状态一致
    （同一 GT 二进制两模式对照）；任何简化都必须标注并给出 oracle。M4 起才允许语义化改写
-   改变实现方式，且必须通过音频/行为对照。
-4. **目录卫生**：调试产物写 `mk2cpp/out/` 或 `%TEMP%\opencode\`，任务收尾清空；
+   改变实现方式，且必须通过音频/行为对照。所有 oracle GT 运行必须加 `-nomidi`
+   （否则宿主 MIDI 端口的外部字节会被注入、造成 hash 漂移）。
+4. **测试预算与范围**：默认回归只跑 037（`python3 mk2cpp/tests/m4_quick_gate.py`，
+   约 65 s）；demo 60 s 预算（`--demo`，`[144M,1440M)`，约 61 s）；boot/demo200
+   两模式（`two_mode_check.py`）仅在主链路改动时跑。**只测 037，不再默认/半默认
+   测其他曲子**；82 曲语料与压力矩阵仅用户明确要求时运行，且必须分批、汇报耗时。
+   单次前台预算 ≤3 分钟，超时后台/分片并先告知。
+5. **测试脚本跨平台**：测试一律用 Python 3 标准库（`tests/*.py`），不写平台路径，
+   GT 可执行文件按平台自动探测（`build/nuked-sc55[.exe]`）。**不得把嵌入式解释器
+   提交进仓库**；各用户使用自己机器的解释器（本机环境因人而异，见仓库根
+   `local.md`，不入库）。门禁已无 `.ps1`（旧脚本全部移植/删除）；
+   `m4_stress_voices` 随 M5 暂缓，重启时以 Python 重写。
+6. **目录卫生**：调试产物写 `mk2cpp/out/` 或 `%TEMP%\opencode\`，任务收尾清空；
    `../build/` 只留运行资产。
 
 ## 里程碑
@@ -88,7 +108,7 @@ cmake --build build
 | M1 ✅ | `mk2cpp.h` 集成（`-mk2cpp` + 混合回退）+ h8lift（h8dec/h8part/h8emit）+ tracediff + cover + hashdump | **已达成（2026-09-11）**：9217 PC 注册；boot 0–3M 与 demo 200–202M 两模式 trace + 状态哈希 + 基准 trace 全部一致 |
 | M2 ✅ | 主固件全执行面翻译（含未执行可达路径） | **已达成（2026-09-11）**：15999 PC（9217 执行集 + 6782 可达新增）全译、0 stub（13 处 `TODO(gt)`）；boot+demo200 两模式 trace + 状态哈希与 M1 基线一致 |
 | M3 ✅ | 子 MCU 固件翻译（`smemit` 全译 rom_sm 4KB）+ SM/主 CPU 5× 时序对接 | **已达成（2026-09-11）**：4096 SM PC 全译；boot+demo200 两模式 `s` 行 SM trace 逐条一致、hashdump 与 M1 基线同哈希（含 `hash.sm`/`sm_ram`/`hash.lcd_state`）；执行集（45/251 PC）全落翻译区间 |
-| M4（进行中） | voice/PCM 语义化改写（stock 28）：主链 `native_pool`/`native_allocfree`/`voice_materialize`/`mask_acc`/`pcm_enable`（1260 PC）已手写 C++；闭包剩余例程待翻译（见 `out/m4/18_closure_gap.md`，非可选） | 主链已达成（2026-09-12）：55s MIDI 整曲与 stock 逐字节一致（pcmdiff 0/7,282,760）、boot/demo trace+hash 与基线一致、试听通过；全量翻译进行中 |
+| M4（进行中） | voice/PCM 语义化改写（stock 28）：手写 C++ 覆盖 `native_pool`/`native_allocfree`/`voice_materialize`/`mask_acc`/`pcm_enable` + 闭包例程（`pcm_dispatch`/`note_path`/`note_chain_tail`/`pcm_interp`/`dsp_rate`/`reset_init` + 原 `pcm_misc` 拆分出的 7 模块 + 原 `shared_misc` 拆分出的 `dsp_rate_common`/`maint_fill_d1de`/`maint_merge_d1cd`/`maint_counter_d1d5`/`maint_voice_gate_d1ff`/`maint_table_walk_d1d6`/`maint_bit_scan_d1cc`/`shared_nop_rts` + `hand_prims.h`）共 4239 PC | 覆盖达成（2026-09-12）：closure−gen−hand=0、82/82 整曲逐字节一致、boot/demo trace+hash 与基线一致；**语义化未完成**：hand 主体仍为逐指令 case 表（非可读语义 C++），模块需按 ROM 例程拆分重写；n=28 音频 null + 听感验收未执行 |
 | M5（暂缓） | 256 复音扩展（**目标 256 声**；`pcm_ext_*`/`-voices:`/0xE800/page6-7；原 M4c 容量优化）——独立于翻译目标的能力研究 | 已回滚（2026-09-11）；`-voices:255` 压力矩阵（n=32/64/128/255，255 = 0xff 哨兵妥协上限，非目标）随扩展暂缓；设计记录 `docs/07–11` |
 
 详细设计见 `docs/00_plan.md`、`docs/01_architecture.md`、`docs/02_conventions.md`。

@@ -1,131 +1,133 @@
 # mk2cpp/tests
 
-Oracle scripts for the mk2cpp integration. `two_mode_check.ps1` runs stock GT
-twice for one scenario and window — default interpreter vs `-mk2cpp` translated
-core — then compares traces, state hashes and (when applicable) the frozen
-`tools/baselines` fixture.
+Oracle scripts for the mk2cpp integration. **Canonical, cross-platform
+implementations are the Python 3 scripts** (standard library only, no bundled
+interpreter):
 
-GT never self-exits, so the script polls for the `-hashdump` file and a
-completed trace window and then force-kills the process. It is pure PowerShell
-5.1 (no Python) and writes everything under `-OutDir` only.
+- `m4_quick_gate.py` — default regression: 037 in both modes, full-WAV SHA256.
+- `two_mode_check.py` — scenario regression: stock vs `-mk2cpp` traces/hashes
+  plus the frozen `tools/baselines` fixtures.
+
+Run them with your own Python 3 interpreter: `python3 mk2cpp/tests/m4_quick_gate.py`
+(never commit an embedded interpreter). GT never self-exits, so the scripts poll
+for the completion marker and force-kill the process; outputs go under
+`mk2cpp/out/`.
+
+本机相关设置（解释器、本地素材路径等）因人而异，不入库；按需自建仓库根的
+`local.md` 并以其为准（README 不写具体值）。
+
+No `.ps1` gate scripts remain: `two_mode_check.ps1`, `gt_run.ps1` and
+`m4_audio_null.py` were removed after their logic was ported to Python;
+`m4_stress_voices.ps1` was deleted with the M5 rollback (rewrite in Python when
+M5 restarts). The Python scripts are the only gate.
+
+## 默认回归口径（2026-09-12 起，用户要求）
+
+- **指定回归曲 = 037**（外部 MIDI 测试冻结在这一首；曲子足够复杂，覆盖绝大
+  部分行为）。**不再默认或半默认测其他曲子**。默认回归 =
+  `python3 mk2cpp/tests/m4_quick_gate.py`（037 两模式并行 + WAV 逐字节，约 65 s）；
+  改动主链路/非 voice 路径时再跑
+  `python3 mk2cpp/tests/two_mode_check.py --scenario boot|demo200`（各 1–2 分钟）。
+- **demo 预算 = 60 秒模拟时间**：`m4_quick_gate.py --demo`（窗口
+  `[144M, 1440M)` cycles，144M 起跳过开机动画，墙钟约 61 s）。内置 demo 有 5 首曲，
+  **永远不默认跑完整播放列表**；`two_mode_check.py --scenario demo200` 的
+  `[200M,202M)` 只是 2M-cycle 冻结 fixture（秒级），两者用途不同、都不长跑。
+- **不默认跑 82 曲语料**（`out/m4/corpus/midi*.sched`）与压力矩阵
+  （cov_mix/stress_*）：它们是代理侧扩展覆盖，不是用户要求；仅在用户明确
+  要求"全量"时运行（8 并发约 30–40 分钟），且必须分批并汇报总耗时。
+- **单次前台测试预算 ≤3 分钟**；超过必须后台/分片，并先告知用户。长跑会
+  阻塞会话，用户以此计算机会成本——不要用"更保险"扩大默认测试范围。
+
+### 确定性与 `-nomidi`（必须）
+
+- 所有 oracle GT 运行都要加 `-nomidi`：Windows 构建默认打开主机第一个 MIDI
+  输入口，外部字节由回调线程经 `MCU_PostUART` 在任意 cycle 注入，造成运行间
+  hash 漂移（2026-09-12 实测：gate 两实例相对历史同点漂移，端口安静后复跑恢复；
+  `src/mcu.cpp` 已加 `-nomidi` 跳过 `MIDI_Init`）。
+- `two_mode_check.py`、`m4_quick_gate.py` 已默认带 `-nomidi`；手工 oracle
+  运行也必须带。
 
 ## M4 oracle scripts (Wave 0c)
 
 > **回滚说明（2026-09-11）**：256 复音扩展（`-voices:<n>` 等）已从 GT 回滚到原版
 > 28 复音实现。`m4_stress_voices.ps1`（n=32/64/128/255）所依赖的 `-voices:` 现已无效，
 > 该脚本**暂缓**（当前运行会静默按 28 复音跑，结果不代表压力测试）。
-> `m4_audio_null.ps1` 的 n=28 音频 null 仍有效（`-voices:28` 现为 no-op，等价默认 28）。
+> `m4_audio_null.py` 的 n=28 音频 null 仍有效（`-voices:28` 现为 no-op，等价默认 28）。
 
 | Script | Purpose | Real GT run? |
 |---|---|---|
-| `m4_audio_null.ps1` | n=28 audio null: stock vs `-mk2cpp`（`-voices:28` 已回滚为 no-op，等价默认 28；`[300M,320M)` WAV payload / `-audiohash` / state scalars）；可选 `-HandOff` 同二进制 A/B、`-CheckBaseline` 冻结基准门禁（G6） | only with `-Execute -UserPresent` |
-| `m4_stress_voices.ps1` | ~~n=32/64/128/255 矩阵（255 = 妥协上限，目标 256）~~ **暂缓**（`-voices:` 已回滚）；原 S1-S7 解析与 O1-O10 映射（`cfg3d=0x7b` + `pcm.ext_voices=n`）随 256 扩展暂缓 | 暂缓 |
-| `two_mode_check.ps1` | M1-M3 default-path regression (trace/hash, `SDL_*_DRIVER=dummy`) | headless by design, unchanged |
-| `gt_run.ps1` | Hard-timeout GT runner: starts the exe, waits for a hash/WAV-`.meta`/trace file, then force-kills it (GT never self-exits). Shared by tooling/debug, not a test oracle. | n/a (wrapper) |
+| `m4_audio_null.py` | n=28 audio null: stock vs `-mk2cpp`（`-voices:28` 已回滚为 no-op，等价默认 28；`[300M,320M)` WAV payload / `-audiohash` / state scalars）；可选 `--hand-off` 同二进制 A/B、`--check-baseline` 冻结基准门禁（G6） | only with `--execute --user-present` |
+| （256 压力矩阵）| n=32/64/128/255（255 = 妥协上限，目标 256）**随 M5 暂缓**；原 `m4_stress_voices.ps1` 已删除，M5 重启时以 Python 重写 | 暂缓 |
+| `two_mode_check.py` | M1-M3 default-path regression (trace/hash, `SDL_*_DRIVER=dummy`, `-nomidi`); cross-platform | headless by design, unchanged |
+| `m4_quick_gate.py` | **默认回归**：037 两模式并行 WAV 逐字节（`-nomidi`，硬超时，约 65 s）；`--demo` 跑内置 demo 60 s 预算（`[144M,1440M)`，约 61 s）；`--sched` 可指定其他 schedule（仅调试用，默认冻结 037） | headless, no user needed |
 
 Hard boundaries for the M4 scripts:
 
-- **Dry-run by default.** Without `-Execute` the scripts only validate paths,
+- **Dry-run by default.** Without `--execute` the scripts only validate paths,
   probe the GT build (`-h` only) and print the exact commands, timeout and
   comparison plan. Dry-run exits `0`; missing GT options are printed as
-  `ERROR:` lines and `-RequireReady` turns them into exit `2`.
-- **`-Execute` requires `-UserPresent`** (otherwise exit `2`) and starts GT
+  `ERROR:` lines and `--require-ready` turns them into exit `2`.
+- **`--execute` requires `--user-present`** (otherwise exit `2`) and starts GT
   with LCD window + real audio. They never set `SDL_VIDEODRIVER`/`SDL_AUDIODRIVER`.
 - Timeout is `ceil(end_cycles/24e6 * 2) + 15` s (320M -> 42 s, 400M -> 49 s);
-  the process is `Stop-Process -Force`d in a `finally` block.
+  the process is force-killed after the completion markers appear.
 - Automated = file/stream comparison and judgement parsing. Manual = LCD
-  observation, n=28 A/B listen, ~~255-voice dropped-note/crackle listen~~
-  （256 复音监听随扩展回滚暂缓）; SKIP is
-  not PASS and a green summary never replaces the on-site listen.
+  observation and the n=28 A/B listen; SKIP is not PASS and a green summary
+  never replaces the on-site listen.
 
-### m4_audio_null.ps1
+### m4_audio_null.py
 
-```powershell
+```bash
 # dry-run (default, no GT process)
-powershell -ExecutionPolicy Bypass -File mk2cpp\tests\m4_audio_null.ps1
+python3 mk2cpp/tests/m4_audio_null.py
 
-# readiness gate: exit 2 until the GT options/corpus exist
-powershell -ExecutionPolicy Bypass -File mk2cpp\tests\m4_audio_null.ps1 -RequireReady
+# readiness gate: exit 2 until the GT options exist
+python3 mk2cpp/tests/m4_audio_null.py --require-ready
 
-# real run (user present, LCD + audio)
-powershell -ExecutionPolicy Bypass -File mk2cpp\tests\m4_audio_null.ps1 -Execute -UserPresent
+# real run (user present, LCD + audio; host MIDI disabled via -nomidi)
+python3 mk2cpp/tests/m4_audio_null.py --execute --user-present
 
 # frozen stock 300M-320M baseline gate (G6; local fixture, missing baseline = SKIP)
-powershell -ExecutionPolicy Bypass -File mk2cpp\tests\m4_audio_null.ps1 -CheckBaseline -Execute -UserPresent
+python3 mk2cpp/tests/m4_audio_null.py --check-baseline --execute --user-present
 
-# MIDI-driven variant and W3 gate-5 A/B (needs a corpus schedule)
-powershell -ExecutionPolicy Bypass -File mk2cpp\tests\m4_audio_null.ps1 -Scenario midi `
-    -MidiSchedule mk2cpp\out\m4\corpus\poly28.sched -HandOff -Execute -UserPresent
+# MIDI-driven variant and W3 gate-5 A/B (schedule path from local.md)
+python3 mk2cpp/tests/m4_audio_null.py --scenario midi \
+    --midi-schedule mk2cpp/out/m4/corpus/midi037.sched --hand-off \
+    --execute --user-present
 ```
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `-Scenario` | `demo` | `demo` or `midi` (`-midiseq <schedule> 200000000`) |
-| `-AudioStart` / `-AudioEnd` | `300M` / `320M` | audio window; default per `plan_256.md` |
-| `-StateAt` | `0` (= `AudioEnd`) | `-hashdump` cycle; must be `>= 200M` |
-| `-TimeoutSec` | `0` (auto) | per-run kill timeout |
-| `-OutDir` | `mk2cpp\out\m4\audio_null` | outputs (gitignored) |
-| `-MidiSchedule` | empty | required for `-Scenario midi` |
-| `-Gain` | empty | optional `-gain:<x|db>`; must match across runs |
-| `-CheckBaseline` | off | G6 gate: verify `tools\baselines\m4_audio\SHA256SUMS.txt` (mismatch/missing listed file = FAIL) and require the stock WAV payload/`-audiohash` to match the frozen capture; missing baseline dir/manifest = SKIP |
-| `-BaselineDir` | `tools\baselines\m4_audio` | frozen baseline directory (relative paths resolve against the repo root) |
-| `-BaselineName` | `stock_300M_320M` | frozen file stem inside `-BaselineDir`; must match the frozen `-AudioStart/-AudioEnd` window |
-| `-HandOff` | off | adds `-mk2cpp-hand:0` A/B run (W3 gate 5) |
-| `-RequireReady` | off | dry-run exits `2` when required GT options are missing |
-| `-Execute` / `-UserPresent` | off | the only way to launch GT; both are required |
+| `--scenario` | `demo` | `demo` or `midi` (`-midiseq <schedule> 200000000`) |
+| `--audio-start` / `--audio-end` | `300M` / `320M` | audio window |
+| `--state-at` | `0` (= end) | `-hashdump` cycle; must be `>= 200M` |
+| `--timeout` | `0` (auto) | per-run kill timeout |
+| `--outdir` | `mk2cpp/out/m4/audio_null` | outputs (gitignored) |
+| `--midi-schedule` | empty | required for `--scenario midi` |
+| `--gain` | empty | optional `-gain:<x|db>`; must match across runs |
+| `--check-baseline` | off | G6 gate: verify `tools/baselines/m4_audio/SHA256SUMS.txt` (mismatch/missing listed file = FAIL) and require the stock WAV payload/`-audiohash` to match the frozen capture; missing baseline dir/manifest = SKIP |
+| `--baseline-dir` | `tools/baselines/m4_audio` | frozen baseline directory |
+| `--baseline-name` | `stock_300M_320M` | frozen file stem inside `--baseline-dir` |
+| `--hand-off` | off | adds `-mk2cpp-hand:0` A/B run (W3 gate 5) |
+| `--require-ready` | off | dry-run exits `2` when required GT options are missing |
+| `--execute` / `--user-present` | off | the only way to launch GT; both are required |
+| `--exe` | `build/nuked-sc55[.exe]` | GT executable override |
 
 Checks: `-audiohash` equality, WAV payload SHA256 (`pcmdiff --tolerance 0`
 report when built), finalized WAV header, `.meta` window/rate/length equality,
 layout-independent state scalars (`mcu.pc/sr/cycles`, `pcm.config_reg_3c/3d`),
 `LCDEN 0 <= 2`, CPU duty report (INFO), and the hand on/off A/B. With
-`-CheckBaseline` it adds the G6 checks: `baseline:integrity` (SHA256SUMS.txt
+`--check-baseline` it adds the G6 checks: `baseline:integrity` (SHA256SUMS.txt
 re-verification; mismatch/missing listed file = FAIL), `baseline:wav` (stock
 payload == frozen payload) and `baseline:audiohash` (stock `audio_fnv1a` ==
 frozen). A missing baseline directory, manifest or file is reported as `SKIP`
 with the reason; the dry-run prints the baseline status but keeps exit `0`.
 
-### m4_stress_voices.ps1
+### 256-voice stress matrix（M5 暂缓）
 
-```powershell
-# dry-run matrix; per-level SKIP when the corpus schedule is missing
-powershell -ExecutionPolicy Bypass -File mk2cpp\tests\m4_stress_voices.ps1
-
-# demo-scenario long run (no MIDI material needed)
-powershell -ExecutionPolicy Bypass -File mk2cpp\tests\m4_stress_voices.ps1 -Scenario demo -Execute -UserPresent
-
-# subset (Windows PowerShell 5.1 -File binds comma lists as one token, so the
-# script splits them itself; both "32,64" and "32 64" work)
-powershell -ExecutionPolicy Bypass -File mk2cpp\tests\m4_stress_voices.ps1 -VoiceLevels 32,64
-```
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `-VoiceLevels` | `32,64,128,255` | levels outside `28..255` are warned and skipped (`256` is a CLI cap violation, D1) |
-| `-Scenario` | `midi` | `midi` (`-midiseq`) or `demo` |
-| `-MidiSchedule` | empty | single schedule override; empty -> `<CorpusDir>\poly<n>.sched` |
-| `-CorpusDir` | `mk2cpp\out\m4\corpus` | not committed; missing schedule = SKIP + midisched hint |
-| `-RunTo` | `400M` | simulation end; timeout from this value |
-| `-AudioStart` / `-AudioEnd` | `300M` / `320M` | audio window |
-| `-HashAt` | `0` (= `RunTo`) | `-hashdump` cycle; must be `>= 200M` |
-| `-TraceFrom` / `-TraceTo` | `0`/`0` -> `RunTo-2M`/`RunTo` | trace window used for S1/O10 |
-| `-TimeoutSec` | `0` (auto) | per-level kill timeout |
-| `-OutDir` | `mk2cpp\out\m4\stress` | outputs (gitignored) |
-| `-RequireReady` | off | dry-run exits `2` when GT options or schedules are missing |
-| `-Execute` / `-UserPresent` | off | the only way to launch GT; both are required |
-
-Per-level checks: `S0` schedule presence; `S1` run/trace/`LCDEN`; `S2` non-zero
-WAV payload; `S3` CPU duty/real-time factor (INFO); `S4` `pcm.config_reg_3d ==
-0x7b` **and** `pcm.ext_voices == n` (plan A, 2026-09-11, per
-`out/m4/12_cfg3d_voice_count.md`; `ext_voices` is read from `-snapinfo` only
-because `-hashdump` stays v1 for M1-M3 baseline compatibility, and a
-missing/unparsable `ext_voices` is a SKIP with the reason
-printed, never a PASS); `S5`
-`select_channel` coverage; `S6` low-32 mask popcount (ext writes need the G2
-pcmtrace extension); `S7` IRQ slot evidence (G2/G3, else SKIP). The `O1-O10`
-mapping is printed in `plan.txt` and parsed where evidence exists: O2/O3 need
-`-snapinfo` (the `-hashdump` text stays v1 and does not grow scalars), O5 uses pcmtrace PCs
-`00:5527`/`00:5664`, O6 needs ext write logging, O9 stays with
-`two_mode_check.ps1`, O10 is the `00:037A` stall signature.
+n=32/64/128/255 压力矩阵随 256 复音扩展（M5）暂缓；原 `m4_stress_voices.ps1`
+已删除，M5 重启时以 Python 重写（`-voices:` CLI 已回滚，当前不可用）。O1–O10
+映射与 S1–S7 设计保留在 `docs/10_m4_oracle.md`。
 
 ### MIDI corpus (not committed)
 
@@ -142,45 +144,37 @@ Schedule cycles are relative to the `-midiseq` start argument (the scripts pass
 `--byte-gap` (default 7680 cycles = 320 us) so the 8192-byte GT UART ring is not
 overrun; `--byte-gap 0` groups the bytes of one event on one line.
 
-## two_mode_check.ps1 usage (M1-M3, unchanged)
+## two_mode_check.py usage (cross-platform)
 
-```powershell
+```bash
 # boot [0,3M), expected PASS
-powershell -ExecutionPolicy Bypass -File mk2cpp\tests\two_mode_check.ps1 -Scenario boot
+python3 mk2cpp/tests/two_mode_check.py
 
-# 200M demo window [200M,202M), ~40s per run; raise the timeout
-powershell -ExecutionPolicy Bypass -File mk2cpp\tests\two_mode_check.ps1 -Scenario demo200 -TimeoutSec 90
+# demo window [200M,202M)
+python3 mk2cpp/tests/two_mode_check.py --scenario demo200
 
-# custom window/mode arguments
-powershell -ExecutionPolicy Bypass -File mk2cpp\tests\two_mode_check.ps1 `
-    -Scenario custom -WindowFrom 0 -WindowTo 1000000 -HashCycle 1000000 -ScenarioArgs @('-demo')
+# custom window / extra GT args
+python3 mk2cpp/tests/two_mode_check.py --scenario custom \
+    --args -demo --window-from 0 --window-to 1000000 --hash-at 1000000
 ```
-
-## two_mode_check.ps1 parameters
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `-Scenario` | `boot` | `boot` (`-mk2`), `demo200` (`-mk2 -demo`), `custom` (`-mk2` + `-ScenarioArgs`) |
-| `-Window` | `auto` | Named window preset: `auto`, `boot3m`, `200m`, `custom` |
-| `-WindowFrom` | `0` | Trace window start (overrides preset when > 0) |
-| `-WindowTo` | `0` | Trace window end, exclusive (overrides preset when > 0) |
-| `-HashCycle` | `0` | `-hashdump` trigger cycle (0 → `-WindowTo`; overrides preset when > 0) |
-| `-TimeoutSec` | `60` | Per-run poll timeout; GT is killed afterwards either way |
-| `-OutDir` | `mk2cpp\out\twomode` | Output directory (relative paths resolve against the repo root) |
-| `-ScenarioArgs` | empty | Extra GT args for `-Scenario custom` only |
-| `-KeepGoing` | off | Continue to the summary and exit 0 even when checks fail |
+| `--scenario` | `boot` | `boot` (`-mk2`), `demo200` (`-mk2 -demo`), `custom` (`-mk2` + `--args`) |
+| `--args` | empty | Extra GT args for `--scenario custom` (nargs after `--args`) |
+| `--window-from` / `--window-to` | `0` | custom trace window, `--window-to > --window-from` required |
+| `--hash-at` | window end | `-hashdump` trigger cycle |
+| `--timeout` | `120` | per-run hard timeout (s); GT is force-killed afterwards either way |
+| `--exe` | `build/nuked-sc55[.exe]` | GT executable override |
+| `--outdir` | `mk2cpp/out/twomode` | output directory |
 
 Scenario presets: `boot` = `[0,3000000)` hash@3000000; `demo200` =
 `[200000000,202000000)` hash@202000000.
 
-## two_mode_check.ps1 comparison
-
-1. `def.trace` vs `tr.mk2cpp.trace` — `mk2cpp\tools\tracediff\tracediff.exe`
-   (exit 0 required; exit 1 = first divergence, 2/3 = prefix).
-2. `def.hash` vs `tr.mk2cpp.hash` — `Get-FileHash` SHA256.
-3. `def.trace` vs `tools\baselines\trace_boot3m_base.txt` (boot, 0/3M only) or
-    `trace_200m_base.txt` (demo200, 200M/202M only). If the fixture is absent the
-    check is `SKIP`, not a failure.
+Comparison: `def.trace` SHA256 == `tr.mk2cpp.trace` SHA256; `def.hash` ==
+`tr.mk2cpp.hash`; `def.trace` == `tools/baselines` fixture for the frozen
+scenarios (SKIP when the local fixture is absent). On mismatch the first
+differing line is printed.
 
 Since M3 the SM (sub MCU) is part of this check automatically: the unified trace
 carries the `s <sm_cycles> <pc>` SM lines (boot ~125K, demo200 ~208K), and the
@@ -188,19 +182,12 @@ state hash includes `hash.sm`, `sm_ram`, `sm_shared_ram`, `sm_device_mode` and
 `hash.lcd_state` — so a PASS also proves the translated SM (`-mk2cpp`) drives the
 SM state and LCD identically to the GT interpreter.
 
-The script also checks that both runs produced a non-empty trace and hash; if a
-file never appears it marks `FAIL` and prints the tail of the run's stdout and
-stderr.
-
-## Outputs (under `-OutDir`)
+## Outputs (under `--outdir`)
 
 ```
 def.trace / def.hash                 default interpreter run
 tr.mk2cpp.trace / tr.mk2cpp.hash     -mk2cpp run
-diff_trace.md / diff_trace_div.txt   tracediff def vs -mk2cpp
-diff_baseline.md / diff_baseline_div.txt
-summary.txt                          PASS/FAIL table
-logs\*.stdout.txt / *.stderr.txt     redirected run logs
+def.stdout.txt / def.stderr.txt      redirected run logs (same for tr.mk2cpp)
 ```
 
 ## Frozen GT interface (Wave 0a/0b minimum commitments)
@@ -280,7 +267,7 @@ asks for `-voices:256` until that design change (D1) is approved.
   `-snapinfo`; when absent, S4/O4 parse as SKIP (never PASS).
 - The stock 300M-320M audio baseline freeze (G6) is **done**: the frozen dump
   lives in `tools\baselines\m4_audio\` (local fixture, gitignored, SHA256SUMS.txt
-  verified; see `tools\baselines\README.md`). `m4_audio_null.ps1 -CheckBaseline`
+  verified; see `tools\baselines\README.md`). `m4_audio_null.py -CheckBaseline`
   turns the n=28 null into a frozen-reference comparison. Refreeze (user
   present) when the stock PCM/ROM path or the audio tap changes.
 - The `mk2cpp/README.md` tools directory table was not updated (write scope of

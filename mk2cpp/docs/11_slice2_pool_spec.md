@@ -12,7 +12,7 @@
 slice-2 限定 **L0**（一次 `MK2CPP_Step` = 恰好一条 H8 指令）；整例程 hook（L1）在 n=28
 null 通过前不得启用，且首个 L1 用例只能是全 IML=7 的 `mask_acc 0x1ad3`（09 §4.3）。
 基线：HEAD `84d3e51`；L0 首切片 `mk2cpp/src/hand/pcm_enable.cpp` 与 oracle
-`mk2cpp/tests/m4_audio_null.ps1` 已落地并 n=28 null PASS。
+`mk2cpp/tests/m4_audio_null.py` 已落地并 n=28 null PASS。
 地址约定：`PC` 为 flat（`0000xxxx`=rom1，`0004xxxx`=rom2）；`dasm` 行号指
 `tools/baselines/dasm_full.txt`；置信度：**C**=ROM+src 证实、**S**=强证据、**I**=推断。
 
@@ -455,7 +455,7 @@ mk2cpp_trace_check();           /* T 检查仍在块尾一次（与 gen 现状�
 
 ## 5. 验收计划
 
-### 5.1 n=28 null（必过 gate；在现有 `m4_audio_null.ps1` 上加强）
+### 5.1 n=28 null（必过 gate；在现有 `m4_audio_null.py` 上加强）
 
 命令与现状一致（`-mk2 -mk2cpp -voices:28 -demo -wav: -audiowin 300M 320M -audiohash 320M -hashdump 320M`；可选 `-HandOff`）。
 
@@ -539,7 +539,7 @@ L1 机制若同期开发（host 协议 + mask_acc 验证）另计 ~1–1.5 人�
 - 0x15d1：`dasm:2142-2148`；R18：`polyphony_256_todo.md:149-158`；碎片表 `polyphony_256_feasibility.md:198-228`。
 - 地址模型：`src/mcu.cpp:657`（sram static）、`:707-709`（page0 <0x8000→rom1）、`src/mcu.h:208-215`（页寄存器）；`src/mcu_opcodes.cpp:571-580`（disp16）、`:887/911/1000`（ex_ignore）、`:779-800`（MOVS）。
 - 表容量：`mk2cpp/src/mk2cpp.cpp:31,64-78,103-115`；T 检查：`:136-140`；PostReset 占位：`:279-284`。
-- 验收：`mk2cpp/docs/10_m4_oracle.md` §2；`mk2cpp/tests/m4_audio_null.ps1:41-69`；现状 hash：`mk2cpp/out/m4/audio_null/*.state.hash`（stock==m4 无 diff）。
+- 验收：`mk2cpp/docs/10_m4_oracle.md` §2；`mk2cpp/tests/m4_audio_null.py:41-69`；现状 hash：`mk2cpp/out/m4/audio_null/*.state.hash`（stock==m4 无 diff）。
 
 ## 附录 B — 对既有文档的勘误（变更记录）
 

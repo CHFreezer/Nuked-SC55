@@ -1,9 +1,10 @@
 # mk2cpp 计划（M1–M5）
 
 状态：M1 ✅ M2 ✅ M3 ✅（2026-09-11，直译）；M4 语义化改写（stock 28）进行中
-（2026-09-12 主链完成并逐字节验证；voice 闭包尚待全量翻译）；M5（256 复音扩展）
-已回滚暂缓（2026-09-11）。里程碑口径：M4 = ROM 全量 C++ 翻译的语义层收尾；
-M5 = 在翻译目标之外新增 256 复音能力的研究。
+（2026-09-12 覆盖翻译完成并逐字节验证：4239 PC、closure−gen−hand=0、82/82
+曲目一致；**语义化与模块化未完成**：hand 主体仍为逐指令 case 表）；M5（256
+复音扩展）已回滚暂缓（2026-09-11）。里程碑口径：M4 = ROM 全量 C++ 翻译的
+语义层收尾；M5 = 在翻译目标之外新增 256 复音能力的研究。
 依据：`../tools/docs/`（证据协议、voice_memory_map、voice_bounds_inventory、
 task_irq_map、polyphony_256_todo）。
 
@@ -15,7 +16,7 @@ task_irq_map、polyphony_256_todo）。
 - **终态**：GT 的 `-mk2cpp` 模式（`mk2cpp.h` 库）用翻译后的 C++ 跑同一 ROM 场景，
   行为与默认解释器模式等价。**当前聚焦原版 28 复音固件的 C++ 翻译**：
   M1–M3 直译已达成；**M4** 对 voice/PCM 做语义化改写（stock 28）进行中
-  （2026-09-12 主链完成，voice 闭包全量翻译待续）；**M5** 的 256 复音扩展是在此之上的独立能力研究，
+  （2026-09-12 覆盖完成；语义化重写与模块拆分待做）；**M5** 的 256 复音扩展是在此之上的独立能力研究，
   已于 2026-09-11 回滚暂缓（见 §2）。
   **不产出独立可执行程序。**
 
@@ -36,7 +37,7 @@ task_irq_map、polyphony_256_todo）。
 ## 2. 里程碑与验收
 
 ### M1 基础设施 — ✅ 达成（2026-09-11）
-达成记录（命令与产物见 `tests/two_mode_check.ps1`、`out/twomode/`）：
+达成记录（命令与产物见 `tests/two_mode_check.py`、`out/twomode/`）：
 - `h8dec`：`--check-decode` 9235 条 0 mismatch；`h8part`：9217 指令 → 2576 块（与 §06 一致），确定性哈希稳定；`h8emit`：9217 函数、0 stub、7 处 `TODO(gt)`（GT FIXME 尾巴），切片/全量 clang-cl 编译通过。
 - 集成：`-mk2cpp` + `mk2cpp/src/gen`（本地）链接；启动打印 `9217 translated PCs registered`。
 - 验证：boot 0–3M（trace 375,116 行 + hashdump SHA256 91CE3BF8…）与 demo 200–202M（trace 375,001 行 + hash 4B445776…）两模式与基线全部一致；`hashdump` 本身三种运行（h1/h2/h3）同哈希。
@@ -80,7 +81,7 @@ oracle：demo 200M 窗口 0 分歧；boot 3M 0 分歧。
   `smk2` 分派表（按 `sm.pc` 索引）；`src/submcu.cpp` `SM_Update` 取指处分派
   （`-mk2cpp` 且已翻译 → `MK2CPP_SM_Step`，否则 `SM_ExecuteOneInstruction` 回退），
   5× 时钟/`cycles+=48`/timer/UART 时序原样不变；CMake 用 `GLOB sm/` + `MK2CPP_HAS_SM_GEN`。
-- 验证（`tests/two_mode_check.ps1`，同一 GT 二进制两模式）：
+- 验证（`tests/two_mode_check.py`，同一 GT 二进制两模式）：
   - boot [0,3M)：trace 375,116 行（含 125,117 条 `s` 行 SM 指令）两模式逐条一致，
     hashdump SHA256 `91CE3BF8…`（= M1 基线），baseline `trace_boot3m_base.txt` 一致。
   - demo200 [200M,202M)：trace 375,001 行两模式一致，SHA256 `4B445776…`（= M1 基线），
@@ -90,17 +91,23 @@ oracle：demo 200M 窗口 0 分歧；boot 3M 0 分歧。
 oracle：`s` 行 SM trace 与 GT 逐条一致（两模式 + 基线）；LCD 渲染与 GT 相同帧序列
 （`hash.lcd_state` 一致）。**已达成。**
 
-### M4 语义化改写（stock 28）— 闭包翻译完成（2026-09-12）
+### M4 语义化改写（stock 28）— 覆盖完成，语义化进行中（2026-09-12）
 
 **进度（2026-09-12）**：主链路与 voice 闭包例程已全部改写为手写 C++ 并逐指令接入，
 累计约 4100 个 PC 入口：pool-init/alloc-free（`native_pool`/`native_allocfree`）、
 note 物化链（`voice_materialize`）、mask_acc、PCM enable/disable（`pcm_enable`）、
 P0 分派簇（`pcm_dispatch`：IRQ0/voice_search/pcm_dispatcher）、note 链（`note_path`/
-`note_chain_tail`）、P1 杂项（`pcm_misc`：ts_scan/C9/r2d95/note_on_setup/irq、svc_math）、
+`note_chain_tail`）、P1 杂项（原 `pcm_misc`，2026-09-12 已按 ROM 例程拆分为
+`pcm_irq_service`/`pcm_fraction_div`/`note_on_setup`/`pitch_env`/`voice_param`/
+`ts_scan`/`cmd_ring` 七个模块）、
 interp（`pcm_interp`）、0x4DE7 族（`dsp_rate`）、init/reset+d1ac（`reset_init`）、
-共享 helper 与碎片尾（`shared_misc`）。
+共享原语与碎片尾（原 `shared_misc`，2026-09-12 已按 ROM 例程拆分为
+`dsp_rate_common`/`maint_fill_d1de`/`maint_merge_d1cd`/`maint_counter_d1d5`/
+`maint_voice_gate_d1ff`/`maint_table_walk_d1d6`/`maint_bit_scan_d1cc`/
+`shared_nop_rts` 八个模块 + 共享原语 `hand_prims.h`）。
 验证：55 秒 MIDI 整曲与 stock 逐字节一致（`-midiseq`，pcmdiff 0/7,282,760）；
-boot/demo 各窗口 trace+hash 与基线一致；多场景压力与休眠臂对拍一致；用户实时试听通过。
+boot/demo 各窗口 trace+hash 与基线一致；多场景压力与休眠臂对拍一致；
+用户实时试听通过（2026-09-11 早期构建；最终覆盖版听感验收见下）。
 
 **覆盖与剩余（2026-09-12）**：静态可达闭包全部 hand 化（`closure−gen−hand = 0`，
 hand 共 4239 PC）；闭包内 3 簇动态间接目标（interp `0x3A5A-0x3A9D`、pool 续段
@@ -111,6 +118,23 @@ part 复位/参数、主事件循环回边等非 voice 子系统）与死字节/
 既有 trace 两模式逐行一致（`out/m4/33_dynamic_class.md`）。快照审查
 （`out/m4/27_snapshot_status.md`）确认 hand 层无私有仿真状态，GT `state_save/load`
 已完整覆盖，无需 `MK2CPP_StateSave/Load`。
+
+**语义化差距（2026-09-12 复核）**：覆盖翻译只保证行为等价，不代表达到本工程
+"人类可读语义 C++"的目标。当前 `src/hand/` 共 32,413 行、4,232 个
+`case 0x....`，主体是 `switch (mcu.pc)` 逐指令直译（十六进制 PC 控制流、
+裸寄存器读写），与 `../src/` 原作者风格（命名操作/结构体/算法控制流）差距明显；
+只有早期模块（`native_allocfree`/`mask_acc`/`pcm_enable`）有命名原语。
+M4 收口三步：(1) 宿主指令边界回调（每步中断轮询/cycles/trace/MIDI 轮询的
+可重入点，支撑整例程语义写法而不破坏时序）；(2) 语义重写（`pcm_misc.cpp`
+13,950 行/1,130 case 垃圾桶已于 2026-09-12 拆分为 `pcm_irq_service`/
+`pcm_fraction_div`/`note_on_setup`/`pitch_env`/`voice_param`/`ts_scan`/
+`cmd_ring` 七个例程模块，拆分后 040 整曲与拆分前逐字节一致；`shared_misc.cpp`
+同日拆分为 `dsp_rate_common`/`maint_fill_d1de`/`maint_merge_d1cd`/
+`maint_counter_d1d5`/`maint_voice_gate_d1ff`/`maint_table_walk_d1d6`/
+`maint_bit_scan_d1cc`/`shared_nop_rts` 八个例程模块，共享 H8 原语提取为
+`hand_prims.h`，040 整曲同样逐字节一致；其余模块做
+命名审计与全量语义重写）；(3) 正式 oracle：`tests/m4_audio_null.py --execute --user-present
+-CheckBaseline`（含用户在场听感，尚未执行）。
 
 > **里程碑拆分（2026-09-11）**：原 M4 把「voice/PCM 语义化改写」与「256 复音扩展」
 > 捆在一起。现拆分：**M4 = stock 28 的语义化改写，属 ROM 全量 C++ 翻译的收尾**；
@@ -165,7 +189,7 @@ oracle：
 
 oracle（随扩展暂缓）：
 - `-voices:255`（目标 256 声；255 = 妥协上限）：长跑稳定、无复位、PCM 激活、
-  CPU 占空比合理；压力矩阵 n=32/64/128/255（`tests/m4_stress_voices.ps1`）；
+  CPU 占空比合理；压力矩阵 n=32/64/128/255（`tests/m4_stress_voices.ps1`（已删除；M5 重启时以 Python 重写））；
 - ≥255 同时音 MIDI 素材与注入通道（**待办，需用户**，`10` §6）。
 
 设计文档：`07_m4_voice_spec.md`（voice 语义）、`08_m4_pcm_api.md`（PCM/音频）、

@@ -73,7 +73,7 @@
 #include "hand_registry.h"
 
 /* Defined in src/mcu_opcodes.cpp; not exported through a header (same local
- * declaration pattern as pcm_enable.cpp / pcm_misc.cpp). */
+ * declaration pattern as pcm_enable.cpp / the split pcm_* modules). */
 int32_t MCU_ADD_Common(int32_t t1, int32_t t2, int32_t c_bit, uint32_t siz);
 int32_t MCU_SUB_Common(int32_t t1, int32_t t2, int32_t c_bit, uint32_t siz);
 void MCU_SetStatusCommon(uint32_t val, uint32_t siz);

@@ -2,10 +2,14 @@
 
 > **暂缓（2026-09-11）**：本文的 `-voices:255` 压力矩阵（n=32/64/128/255）、
 > `pcm.ext_voices` 判据、O4/S4 的 `cfg3d=0x7b + ext_voices` 期望随 256 扩展回滚
-> **暂缓**（里程碑拆分后归 M5）。n=28 音频 null（`m4_audio_null.ps1`）与
+> **暂缓**（里程碑拆分后归 M5）。n=28 音频 null（`m4_audio_null.py`）与
 > 音频/状态窗口口径仍有效（属 M4）。
 
 状态：已评审 v1，2026-09-11。
+> **更新注（2026-09-12）**：本文所述的 `tests/two_mode_check.py` 已由跨平台
+> `tests/two_mode_check.py` 取代（原 `.ps1` 与其 `gt_run.ps1` wrapper 内容已移植
+> 并删除）；`tests/m4_quick_gate.py` 为默认回归门禁（037，约 65 s）。本机专用
+> 路径见仓库根 `local.md`（每用户本地、不入库）。
 配套文档：[07 voice 语义](07_m4_voice_spec.md) · [08 PCM 引擎与音频路径](08_m4_pcm_api.md) · [09 hand 覆盖表与集成](09_m4_integration.md) · [00 计划](00_plan.md)。
 阅读顺序：00_plan §M4 → 07 → 08 → 09 → **10（验收）**。
 口径：目标 = **256 声同时发音**；验收上限 `-voices:255` 是 `0xff` 哨兵 + 8-bit 池计数妥协下的**阶段性上限，非最终目标**（07 §0.5、§6 D1）；音频/听感窗口 ≥300M，状态 ≥200M；
@@ -33,9 +37,9 @@ n=28 音频 null、n=32/64/128/255 压力长跑、O1–O10 矩阵对应、脚本
    因此 M4 的权威等价性 oracle = **n=28 音频逐样本 null** + **行为/状态标量（O1–O10）**；
    **O9 的 trace 基线回归只覆盖「无 `-voices` 的默认路径」**。
    音频 null 工具链（§2）必须先于 L1 可用（见 §6 D7）。
-2. 现有 `two_mode_check.ps1` 可继续作为「默认路径零回归 + 两模式 trace/hash」自动
+2. 现有 `two_mode_check.py` 可继续作为「默认路径零回归 + 两模式 trace/hash」自动
    对照（用户约定：自动 trace/hash 比对照旧可用），但它设置了
-   `SDL_VIDEODRIVER/AUDIODRIVER=dummy`（`two_mode_check.ps1:70-72`），**不得**被
+   `SDL_VIDEODRIVER/AUDIODRIVER=dummy`（`two_mode_check.py`），**不得**被
    M4 的新验收（音频/听感/压力）复用为运行方式。
 3. 音频取数缺一个 GT 出口：样本在 `MCU_PostSample`（`src/mcu.cpp:1841-1861`）生成
    后只进环形缓冲，没有任何 dump/hash。08 §3.5 已给出 **`-wav:<file>`**（生产者侧
@@ -81,7 +85,7 @@ n=28 音频 null、n=32/64/128/255 压力长跑、O1–O10 矩阵对应、脚本
 
 | 资产 | 说明 | 关键行 |
 |---|---|---|
-| `mk2cpp/tests/two_mode_check.ps1` | 同一 exe 跑两模式（默认解释器 vs `-mk2cpp`），场景 `boot`/`demo200`/`custom`；轮询 `-hashdump` 文件与 trace 尾行达窗后 `Stop-Process -Force`；比较 tracediff + SHA256 + 冻结 baseline | 轮询/杀进程 `:198-300`；trace/hash 比较 `:362-422`；`SDL_*_DRIVER=dummy` `:70-72` |
+| `mk2cpp/tests/two_mode_check.py` | 同一 exe 跑两模式（默认解释器 vs `-mk2cpp`），场景 `boot`/`demo200`/`custom`；轮询 `-hashdump` 文件与 trace 尾行达窗后 `Stop-Process -Force`；比较 tracediff + SHA256 + 冻结 baseline | 轮询/杀进程 `:198-300`；trace/hash 比较 `:362-422`；`SDL_*_DRIVER=dummy` `:70-72` |
 | `mk2cpp/tests/README.md` | 参数表、输出物、退出码、注意事项 | `:26-90` |
 | `mk2cpp/tools/tracediff/tracediff.exe` | 两 trace 差分；exit 0=一致，1=首个分歧，2/3=前缀问题 | `mk2cpp/tools/README.md:73-84` |
 | `mk2cpp/tools/cover/cover.exe` | 覆盖率仪表盘 | `mk2cpp/tools/README.md:85-92` |
@@ -121,7 +125,7 @@ n=28 音频 null、n=32/64/128/255 压力长跑、O1–O10 矩阵对应、脚本
   到 `end` 后 `fflush/fclose`；SM 侧由 `trace_write(1,...)` 写同一文件
   （`src/submcu.cpp` `SM_Update` 内调用，M3 已对接）。
 - 完成判定：尾行 cycle ≥ 窗口末端（现脚本用尾行 `m`/`s` 的第二个字段，
-  `two_mode_check.ps1:181-196`）。
+  `two_mode_check.py`）。
 
 ### 1.4 hashdump 格式（`mcu.cpp:1306-1404`）
 
@@ -169,12 +173,12 @@ sm/sm_ram/sm_shared_ram/.../uart_buffer/uart_rx_byte` + `hash.lcd_state`。
 ### 1.8 baseline fixture（状态与音频均已冻结）
 
 - `tools/baselines/trace_boot3m_base.txt`、`trace_200m_base.txt`：O9/默认回归的冻结
-  trace（本地 fixture，缺失时 `two_mode_check.ps1` 记 SKIP）。
+  trace（本地 fixture，缺失时 `two_mode_check.py` 记 SKIP）。
 - `tools/baselines/README.md:110-116` 明确这两个是 stock GT 的 0-diff oracle。
 - **音频 baseline 已冻结（G6，2026-09-11）**：`tools/baselines/m4_audio/`
   `stock_300M_320M.wav / .wav.meta / .audiohash / .state.hash` +
   `SHA256SUMS.txt`（本地 fixture，`tools/baselines/*` 已 gitignore，不入 git；
-  以 SHA256SUMS 冻结完整性）。`m4_audio_null.ps1 -CheckBaseline` 会把本次 stock
+  以 SHA256SUMS 冻结完整性）。`m4_audio_null.py --check-baseline` 会把本次 stock
   跑出的 WAV payload/`-audiohash` 与它对照，防止「两个模式一起错」；
   stock PCM/ROM 路径或音频 tap 变更后需重冻并更新 SHA256SUMS。
 
@@ -212,7 +216,7 @@ M4   : build\nuked-sc55.exe -mk2 -mk2cpp -voices:28 -demo \
 3. `-hashdump 202000000` 的 `hash.pcm` 与 stock 一致；
 4. hand 命中可证（`MK2CPP_HandHitCount()>0`/per-entry hits，09 §2.6）；
 5. `-mk2cpp-hand:0` 重跑与 hand-on 产物**字节一致**（同二进制 A/B，09 §5.4）。
-本脚本的 `-HandOff` 可选第三跑即 gate 5；gate 1–3 由 `two_mode_check.ps1` +
+本脚本的 `--hand-off` 可选第三跑即 gate 5；gate 1–3 由 `two_mode_check.py` +
 `pcmdiff`/`Get-FileHash` 覆盖。
 
 ### 2.2 取数：`-wav:` / `-audiowin` / `-audiohash` 接口设计（默认零变化）
@@ -264,7 +268,7 @@ payload_fnv1a = 0123...   # FNV-1a64(payload)，GT 现成 fnv1a64（mcu.cpp:1314
 | 现场听感窗 | 可放宽到 `[300M,400M)` ≈ 4.2s | 同上 |
 | 状态窗（辅助） | `[200M,202M)` + hash@202M | `plan_256.md:95,102` |
 | 超时 | `ceil(End/24e6×2)+15s`：320M→约 42s | `plan_256.md:96` |
-| 进程管理 | 轮询 `.meta` 出现即视为完成，`finally` 里 `Stop-Process -Force` | `two_mode_check.ps1:198-300` 同款思路 |
+| 进程管理 | 轮询 `.meta` 出现即视为完成，`finally` 里 `Stop-Process -Force` | `two_mode_check.py` 同款思路 |
 
 不允许：`SDL_VIDEODRIVER/SDL_AUDIODRIVER=dummy`；不设超时的无限等待；无人值守跑完
 就下结论。
@@ -362,7 +366,7 @@ summary.txt / plan.txt           检查表 + dry-run 命令留档
 | O6 | 扩展 ext 写（n>32） | 音符后 `0xE800..0xE803` 非零写在 `0x5529/0x5666` 回读前 | 需 `-pcmtrace` 记录 `PCM_WriteExt`（或解析快照 `pcm.voice_mask[4..]`） | 自动 | **缺 G2** |
 | O7 | IRQ slot（n>32） | slot≥32 时 `d15c[slot]` 完整下标，无 `slot-32` 混叠；`0xE820` 读路径 | 需 ext 读日志/`irq_channel` 快照字段 | 自动 | **缺 G2/G3** |
 | O8 | 电源循环后存活 | ≈215.37M 不复位/不 stall；`0x4134C` 配置重init；isr 继续涨 | `-tracepc [214M,216M)` grep `04:134c`；hashdump@200M/220M；`-demo` | 自动 + 人工 | trace 现成；isr 缺 G3 |
-| O9 | 回归（无 flag） | 无 flag 的 200M–202M PC trace 与冻结 baseline 逐字节一致 | `two_mode_check.ps1 -Scenario demo200` + `tools/baselines/trace_200m_base.txt` | 自动（允许照旧 headless） | **现成** |
+| O9 | 回归（无 flag） | 无 flag 的 200M–202M PC trace 与冻结 baseline 逐字节一致 | `two_mode_check.py -Scenario demo200` + `tools/baselines/trace_200m_base.txt` | 自动（允许照旧 headless） | **现成** |
 | O10 | 失败特征 | stall：`isr≈75`、`pc=00:037A`、`iml=7`（FRT2 handler）或复位循环 | trace 里 `00:037A` 持续 + stdout `LCDEN 0` 重复；`isr` 平 | 自动 + 人工 | trace 现成；isr 缺 G3 |
 
 > O1–O10 的「用户现场观察」项（LCD 动画、demo 音、255 丢音/爆音）不因上表自动化而取消；
@@ -389,7 +393,7 @@ summary.txt / plan.txt           检查表 + dry-run 命令留档
 因此新脚本：
 1. 默认 **dry-run**（只校验/打印，不启动 GT）；
 2. `-Execute` 才启动 GT，且必须 `-UserPresent`，否则拒绝；
-3. **绝不**设置 `SDL_VIDEODRIVER/SDL_AUDIODRIVER=dummy`（与 `two_mode_check.ps1:70-72`
+3. **绝不**设置 `SDL_VIDEODRIVER/SDL_AUDIODRIVER=dummy`（与 `two_mode_check.py`
    明确不同）；
 4. `finally` 里无条件 kill；超时按 24MHz×2 计算，不用固定长等待。
 
@@ -397,8 +401,8 @@ summary.txt / plan.txt           检查表 + dry-run 命令留档
 
 | 脚本 | 用途 | 关键参数 | 现状 |
 |---|---|---|---|
-| `m4_audio_null.ps1` | §2 n=28 stock vs `-mk2cpp -voices:28` 音频 null；`-HandOff` 可选加第三跑（09 gate 5）；`-CheckBaseline` 加 G6 冻结基准门禁（`-BaselineDir` 默认 `tools\baselines\m4_audio`） | `-Scenario demo\|midi`、`-AudioStart/End`（默认 300M/320M）、`-MidiSchedule`、`-Gain`、`-HandOff`、`-CheckBaseline`/`-BaselineDir`/`-BaselineName`、`-TimeoutSec`（0=自动）、`-Execute`、`-UserPresent` | 已落地：dry-run 打印命令/超时/比较计划（含基准状态）；真实运行骨架含轮询+kill+SHA256/pcmdiff 比较；`-CheckBaseline` 先验 SHA256SUMS 再比 stock payload/audiohash |
-| `m4_stress_voices.ps1` | §3 压力矩阵与 S1–S7 / O1–O10 判据 | `-VoiceLevels @(32,64,128,255)`、`-Scenario midi\|demo`、`-RunTo 400M`、`-AudioStart/End`、`-HashAt`、`-TraceFrom/To`、`-Execute`、`-UserPresent` | 草稿：dry-run 打印每级命令与预期检查；真实运行骨架含 pcmtrace/hashdump/trace 解析与汇总表 |
+| `m4_audio_null.py` | §2 n=28 stock vs `-mk2cpp -voices:28` 音频 null；`--hand-off` 可选加第三跑（09 gate 5）；`--check-baseline` 加 G6 冻结基准门禁（`--baseline-dir` 默认 `tools\baselines\m4_audio`） | `--scenario demo|midi`、`-AudioStart/End`（默认 300M/320M）、`-MidiSchedule`、`-Gain`、`--hand-off`、`--check-baseline`/`--baseline-dir`/`-BaselineName`、`-TimeoutSec`（0=自动）、`-Execute`、`-UserPresent` | 已落地：dry-run 打印命令/超时/比较计划（含基准状态）；真实运行骨架含轮询+kill+SHA256/pcmdiff 比较；`--check-baseline` 先验 SHA256SUMS 再比 stock payload/audiohash |
+| `m4_stress_voices.ps1（已删除；M5 重启时以 Python 重写）` | §3 压力矩阵与 S1–S7 / O1–O10 判据 | `-VoiceLevels @(32,64,128,255)`、`-Scenario midi\|demo`、`-RunTo 400M`、`-AudioStart/End`、`-HashAt`、`-TraceFrom/To`、`-Execute`、`-UserPresent` | 草稿：dry-run 打印每级命令与预期检查；真实运行骨架含 pcmtrace/hashdump/trace 解析与汇总表 |
 
 脚本路径解析：`$PSScriptRoot` = `mk2cpp/tests` → repo 根 = `..\..`；GT exe 固定
 `build\nuked-sc55.exe`，工作目录 `build`（ROM BasePath）。
@@ -418,7 +422,7 @@ summary.txt / plan.txt           检查表 + dry-run 命令留档
 | **G3 `-snapinfo` + `isr4fe`**（P1） | 在取指后统计 `mcu.pc==0x04FE` 的 fetch 计数（对应文档 `g_isr4fe`）；无参选项，每处 `-hashdump` 点与进程退出时向 stdout 写一行 `SNAP ... cycles/pc/cp/sr/sleep/iml/pend/cfg3c/cfg3d/select_channel/voice_mask_popcount/irq_channel/ext_voices`（`ext_voices` = 方案 A 的 S4/O4 判据，out/m4/12 §4.3；该标量只在此 snapinfo 输出提供，状态 dump 文本保持 v1 不变） | 计数器位置要与文档口径一致（04FE epilogue）；M4 接管后 04FE 可能不再执行 → **同时给出「事件计数」替代口径或明示只对解释器路径有效** |
 | **G4 多 `-hashdump` 点**（P2） | `-hashdump` 改数组（≤8 个），各自一次性写；默认单点行为不变 | 用于长跑漂移/多点 isr 观察；不阻塞 P1 |
 | **G5 `-midiseq <file> [start]`**（P1） | 文本 schedule 注入 `MCU_PostUART`；到点检查环形缓冲余量，满则延后；默认起点 200M | 与 `-demo`/`-mocknote` 同时用要文档化优先级；buffer 8192B（`mcu.h:445`）不是瓶颈，但仍需 backpressure 防覆盖 |
-| **G6 音频 baseline 冻结**（P0，**已冻结 2026-09-11**） | 用 stock 跑 `-wav:`+`-audiowin`（300M–320M）+ `-audiohash 320M` + `-hashdump`@320M，存 `tools/baselines/m4_audio/`（本地 fixture，gitignore，不入 git），以 `SHA256SUMS.txt` 冻结四个文件；`m4_audio_null.ps1 -CheckBaseline` 先验 SHA256SUMS 再要求本次 stock 的 WAV payload/`-audiohash` 与基准一致（不符=FAIL，基准缺失=SKIP） | 基准目录固定为 `tools/baselines/m4_audio/`；以后每次改 stock PCM/ROM 路径或音频 tap 后重冻（并解释原因） |
+| **G6 音频 baseline 冻结**（P0，**已冻结 2026-09-11**） | 用 stock 跑 `-wav:`+`-audiowin`（300M–320M）+ `-audiohash 320M` + `-hashdump`@320M，存 `tools/baselines/m4_audio/`（本地 fixture，gitignore，不入 git），以 `SHA256SUMS.txt` 冻结四个文件；`m4_audio_null.py --check-baseline` 先验 SHA256SUMS 再要求本次 stock 的 WAV payload/`-audiohash` 与基准一致（不符=FAIL，基准缺失=SKIP） | 基准目录固定为 `tools/baselines/m4_audio/`；以后每次改 stock PCM/ROM 路径或音频 tap 后重冻（并解释原因） |
 
 ### 5.2 工具侧（C，遵循「自制工具优先 C」，放 `mk2cpp/tools/`）
 
@@ -466,7 +470,7 @@ summary.txt / plan.txt           检查表 + dry-run 命令留档
 3. **G6 音频 baseline 冻结**：已在 stock 可信期跑完并冻结于
    `tools/baselines/m4_audio/`（`stock_300M_320M.wav/.wav.meta/.audiohash/.state.hash`
    + `SHA256SUMS.txt`；2026-09-11，本地 fixture、gitignore）。
-   `m4_audio_null.ps1 -CheckBaseline` 已接入：SHA256SUMS 不符=FAIL，
+   `m4_audio_null.py --check-baseline` 已接入：SHA256SUMS 不符=FAIL，
    本次 stock 的 WAV payload/`-audiohash` 必须与基准一致；基准缺失=SKIP。
    改动 stock PCM/ROM 路径或音频 tap 后需重冻（用户在场）并更新 SHA256SUMS。
 4. **wav 窗口/时长**：默认自动对照 `[300M,320M)`、听感可 `[300M,400M)`；是否要更长
@@ -491,7 +495,7 @@ summary.txt / plan.txt           检查表 + dry-run 命令留档
   `src/mcu.cpp:1658-1668`（MCU_PatchROM 占位）。
 - 常量：`src/mcu.h:440`（`pcm_ext_voices`）、`:445`（`uart_buffer_size=8192`）。
 - MIDI 入径：`src/midi_win32.cpp:51-59`（`MCU_PostUART`）。
-- 脚本：`mk2cpp/tests/two_mode_check.ps1`（headless env `:70-72`、轮询 `:198-300`、
+- 脚本：`mk2cpp/tests/two_mode_check.py`（headless env `:70-72`、轮询 `:198-300`、
   比较 `:362-422`）、`mk2cpp/tests/README.md:26-90`。
 - 基线：`tools/baselines/README.md:110-116`。
 - 约定：`mk2cpp/README.md:56-83`（规则 1-4、M4 行 `:81`）、`mk2cpp/docs/00_plan.md` §M4

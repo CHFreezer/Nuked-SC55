@@ -36,7 +36,7 @@ Only **docs and code** are committed. ROM data and anything derived from it
 (disassembly, PC/flow sets, traces, snapshots, logs) must never enter git — see
 `docs/evidence_protocol.md` §0.0. `tools/` and `mk2cpp/` are already public
 trees, so ignore rules for artifacts inside them live in the committed
-`.gitignore` (`tools/baselines/*`, `tools/python/*`, `*.exe`, `mk2cpp/out/`,
+`.gitignore` (`tools/baselines/*`, `*.exe`, `mk2cpp/out/`,
 `mk2cpp/src/gen/`, ...) and are shared by every contributor. Never write local
 private path names or local directory layouts into any committed file (docs,
 comments, commit messages); local-only material is excluded locally and stays
