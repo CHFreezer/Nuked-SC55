@@ -1,3 +1,7 @@
+This research fork's current work is documented in [mk2cpp/README.md](mk2cpp/README.md).
+M4 is a reference checkpoint; the M4.5 native C++ backend is planned, not yet implemented.
+The upstream notice and emulator documentation are preserved below.
+
 # Notice: development and maintaining of this emulator has stopped
 Thanks to everyone who was using and enjoying it! You can use one of awesome forks like [the one from jcmoyer](https://github.com/jcmoyer/Nuked-SC55).
 

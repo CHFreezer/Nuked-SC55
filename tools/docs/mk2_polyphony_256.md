@@ -1,5 +1,10 @@
 # Roland SC-55 mkII 复音数 28 → 256 升级方案
 
+> **历史范围（2026-09-13）**：本文保留原 ROM 分析与旧 A/B 补丁实验，不规定当前原生实现。
+> 当前施工按 [M4.5 架构](../../mk2cpp/docs/14_m45_native_architecture.md) 与
+> [施工规程](../../mk2cpp/docs/15_m45_construction_guide.md)，完成后再进入 M5 真 256。
+> 下文已定方案、CLI 与完成状态均属于当时实验，不能据此认定当前 GT 已具备扩容能力。
+
 **修改对象（GT / 模拟器）**：Nuked-SC55 `src/`（`pcm.cpp`/`pcm.h`/`mcu.cpp`）——H8/532 固件的执行环境。
 **固件（被 patch 目标）**：`rom1.bin`（32 KB）、`rom2.bin`（512 KB，mkII）——Roland SC-55 mkII 主 MCU 固件（SC = Sound Canvas）。
 **目标**：复音数从 **28 → 256**，经 CLI flag 开启；**ROM 加载进内存后、仿真开始前 patch 完毕（内存副本）**，不动磁盘 `.bin`。

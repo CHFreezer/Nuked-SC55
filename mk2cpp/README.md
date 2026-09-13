@@ -58,7 +58,8 @@ mk2cpp/
   src/mk2cpp.cpp       集成胶水：分派表、回退统计、版本（入库）
   src/gen/             自动翻译产物（**ROM 派生，不入 git**，本地生成，CMake 可选编译）
                        顶层 = 主 H8（mk2c_r1/r2 + init）；sm/ = 子 MCU（mk2c_sm + init，M3）
-  src/hand/            M4 手工逐指令参考实现（voice/PCM；M4.5 逐步重建算法）
+  src/hand/            M4 手工逐指令参考实现（voice/PCM；保留检查点）
+  src/native/          拟新增：M4.5 原生算法、状态与接入（尚未实现）
   tools/h8lift/        ROM → C++ 反译器（入库）
   tools/tracediff/     两模式 trace/状态差分（入库）
   tools/cover/         覆盖率仪表盘（入库）
@@ -86,8 +87,8 @@ cmake --build build
   `no translated code linked` 描述 gen 链接状态，不能单凭它判定整个运行都在解释器中。
 - 本地启用生成码：追加 `-DMK2CPP_GEN_DIR=<repo>/mk2cpp/src/gen`（生成物不入 git）。
 - 验证（两模式零回归）：
-  `nuked-sc55.exe -mk2 -demo -tracepc <out> 200000000 202000000` vs
-  `nuked-sc55.exe -mk2 -mk2cpp -demo -tracepc <out> 200000000 202000000`，
+  `nuked-sc55.exe -mk2 -nomidi -demo -tracepc <out> 200000000 202000000` vs
+  `nuked-sc55.exe -mk2 -mk2cpp -nomidi -demo -tracepc <out> 200000000 202000000`，
   再与 `tools/baselines` 的基准 trace 比对。
 
 ## 硬性规则
@@ -107,7 +108,7 @@ cmake --build build
    改变实现方式，且必须通过音频/行为对照。所有 oracle GT 运行必须加 `-nomidi`
    （否则宿主 MIDI 端口的外部字节会被注入、造成 hash 漂移）。
 4. **测试预算与范围**：默认回归只跑回归曲（`python3 mk2cpp/tests/m4_quick_gate.py`，
-   约 65 s）；demo 60 s 预算（`--demo`，`[144M,1440M)`，约 61 s）；boot/demo200
+   约 65 s）；demo 推进到 60 s、录音 54 s（`--demo`，`[144M,1440M)`，历史墙钟约 61 s）；boot/demo200
    两模式（`two_mode_check.py`）仅在主链路改动时跑。**只测回归曲，不再默认/半默认
    测其他曲子**；全量语料（规模见 local.md）与压力矩阵仅用户明确要求时运行，且必须
    分批、汇报耗时。单次前台预算 ≤3 分钟，超时后台/分片并先告知。

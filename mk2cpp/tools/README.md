@@ -2,7 +2,9 @@
 
 工具分目录：`h8lift/`（ROM→C++）、`tracediff/`（两模式差分）、`cover/`（覆盖率）、
 `pcmdiff/`（音频 WAV 逐样本对照）、`midisched/`（SMF→`-midiseq` schedule）。
-均 C/C++，clang 构建；产物与调试输出写 `../out/`，不入 git。
+工具主体为 C/C++，clang 构建；`h8lift/sm_parse.py` 等辅助脚本使用 Python 3。
+测试编排见 [tests/README](../tests/README.md)。产物与调试输出写 `../out/`，不入 git。
+这些工具服务 M1–M4 参考执行与研究；M4.5 的采样提取工具仍待实施，见 [16](../docs/16_transparent_bank.md)。
 
 ## 实施状态（2026-09-11）
 
@@ -15,13 +17,15 @@
 | `h8lift/h8emit.c` | ✅ 已实现（发射器） | M1 9217 函数；M2 15999 函数（13 处 `TODO(gt)`）、0 stub；切片/全量 clang-cl 编译通过；对 GT handler 差分 73,736 次执行 0 mismatch |
 | `h8lift/h8reach.c` | ✅ 已实现（静态可达，M2） | 15999 总 PC（9217 exec + 18 vec + 6764 static + 206 跳转表项）；10 个跳转表站点、1015 条表项 |
 | `h8lift/smemit.c` | ✅ 已实现（SM 发射器，M3） | rom_sm 4KB 全译 4096 函数、0 `(null)`；SHA256 自检通过；opcode 模型由 `h8lift/sm_parse.py` 生成（impl 取 GT `SM_Opcode_Table`，len 取 GT handler 路径并以 `tools/disasm/smdasm.c` 的完整 AM 表交叉校验 165/165）；boot+demo200 两模式 SM trace 0 分歧 |
-| `tests/two_mode_check.ps1` | ✅ 已实现（编排） | boot / demo200 两模式全 PASS；失败路径验证 exit 1 |
+| [../tests/two_mode_check.py](../tests/two_mode_check.py) | 当前编排入口（旧 `.ps1` 已移植/删除） | 现行参数与验收范围见 [tests/README](../tests/README.md)；原 M1–M3 回归记录见 00_plan |
 | `pcmdiff/pcmdiff.c` | ✅ 已实现（音频对照，M4） | 构造 10 样本 s16 WAV 自测：相等 exit0、差 1 LSB tol0 exit1、tol1 exit0、差 5 LSB tol1 exit1、`--stats` exit0；缺文件 exit2；data 未回填报错 |
 | `midisched/midisched.c` | ✅ 已实现（SMF→schedule，M4） | 构造 SMF 自测：tempo 500000@ppq480 → 12000000 cycles、running status、`--start`/`-o`、缺文件 exit2 |
 | `hashdump`（GT `-hashdump`） | ✅ 已实现 | h1=h2=h3（解释器两跑 + `-mk2cpp` 回退）同哈希；默认无副作用 |
 
 已知 GT 与 `h8dasm` 的差异（h8dec 以 GT 为准，已在 stderr 提示）：
-1. **银行映射**：`h8dasm.c` 把所有非 rom1 地址当 rom2；GT 的 5/10/11 页是 SRAM、6/7 是扩展 RAM、12/13 是 NVRAM。基线只涉及 cp0/cp4，两者一致。
+1. **银行映射**：`h8dasm.c` 把所有非 rom1 地址当 rom2；GT 实际按型号和页面映射。
+   当前 MK2 的 10/11 页为 SRAM，6/7 扩展 RAM 已不在 GT 中，12/13 页的 NVRAM 分支仅用于 JV-880。
+   基线的执行代码位于 cp0/cp4；不能把其他型号或旧实验页的布局套到 MK2。
 2. **非法/陷入字节**：h8dasm 报"已消耗长度"，GT 走 `MCU_ErrorTrap` 后继续/触发异常；`h8dec` 返回 `valid=0,len=0`。全 ROM 扫描 294,912 PC 中 0 字段不匹配（差异仅此语义）。
 
 ## h8lift / h8dec / tracediff / cover 命令
@@ -34,7 +38,10 @@ pcmdiff.exe --ref <ref.wav> --dut <dut.wav> [--tolerance LSB] [--stats] [--repor
 midisched.exe <in.mid> [-o out.sched] [--start cycles] [--ppq N] [--byte-gap cycles] [--verbose]
 ```
 
-## h8lift — ROM → C++ 反译器（M1）
+## h8lift — ROM → C++ 工具链（M1 原始接口草案）
+
+以下 `h8lift ...` 是早期整体接口示意，并非现有单一命令。实际工具为上表的
+`h8dec`、`h8part`、`h8reach`、`h8emit` 等；生成结果用于参考执行层。
 
 ```
 h8lift <rom1.bin> <rom2.bin> <pcset.txt> <flow.txt> <outdir>
@@ -78,7 +85,8 @@ smemit.exe <rom_sm.bin> <outdir> [--extra <pc-list.txt>]
 ## tracediff — 两模式差分验证（M1）
 
 ```
-tracediff --ref <trace_or_state> --dut <trace_or_state> [--history N] [--hash-every N]
+tracediff --ref <trace_or_state> --dut <trace_or_state> [--history N]
+          [--report out.md] [--divergence out.txt]
 ```
 
 - 对照对象：**同一 `nuked-sc55.exe`** 的默认解释器模式与 `-mk2cpp` 模式，
@@ -90,11 +98,12 @@ tracediff --ref <trace_or_state> --dut <trace_or_state> [--history N] [--hash-ev
 ## cover — 覆盖率仪表盘（M1）
 
 ```
-cover <map.csv> <pcset.txt> [--static <r16_hits.txt>]
+cover --map <map.csv> --exec <pcset.txt> [--static <r16_hits.txt>]
+      [--out <coverage.md>] [--missing-limit N]
 ```
 
 - 统计：已翻译 / 解释器兜底 / 静态可达未覆盖 / 执行集缺口。
-- 输出 Markdown 到 `../out/coverage.md`，并给出未覆盖 PC 的聚类（按 rom/区域）。
+- Markdown 默认写 stdout；用 `--out ../out/coverage.md` 另存报告，包含未覆盖 PC 清单。
 
 ## pcmdiff — WAV PCM 逐样本对照（M4）
 
@@ -140,5 +149,3 @@ midisched <in.mid> [-o out.sched] [--start cycles] [--ppq N]
 - 工具本身入库；不写死任何本地绝对路径，路径全部命令行传入。
 - 错误信息用英文（便于 grep），文档与提交信息用中文。
 - 新增工具必须更新本文件与 `../README.md` 的目录表。
-  （Wave 0c 写权限限 `mk2cpp/tests/**`、`mk2cpp/tools/**`，`../README.md`
-  的目录表条目待补。）

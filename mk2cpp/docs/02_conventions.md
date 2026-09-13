@@ -8,7 +8,7 @@
 - 翻译块：`blk_<rom>_<flat>`，例如 `blk_r1_0000F86`、`blk_r2_00041220`。
 - 已知语义的例程：参考层 `src/hand/` 中用业务名（`voice_alloc`、`pcm_flush` 等），
   `src/gen/` 对应块标注 `// alias: voice_alloc (see hand/)`。
-- 变量/字段：引用 `../tools/docs/voice_memory_map.md` 的字段偏移命名，
+- 参考层变量/字段：引用 [voice_memory_map.md](../../tools/docs/voice_memory_map.md) 的字段偏移命名，
   如 `V->pitch` 对应 `P(v)+0x2`；未确认的字段保留 `f_0xNN` 并标 TODO。
 - 原生算法层按实际职责命名函数、参数和状态字段；原地址映射作为证据和适配信息，
   不要求字段沿用 SRAM 布局。未确认含义应登记，不以猜测命名作为完成依据。
@@ -17,7 +17,7 @@
 
 - 项目名 `mk2cpp` = MK2 ROM→C++；**命名禁用 `h8cpp`**（GT 可跑多种固件，本工程
   翻译的是 MK2 的 ROM 代码，不是 CPU 核）。集成开关/变量/表统一 `mk2cpp` 前缀：
-  `-mk2cpp`、`mk2cpp_enabled`、`mk2cpp_tab_cp0/1`；公共 API 用 `MK2CPP_`；
+  `-mk2cpp`、`mk2cpp_enabled`、`mk2cpp_tab_cp0/cp4`；公共 API 用 `MK2CPP_`；
   生成函数用 `mk2c_r1_XXXX`。
 - 公共符号统一 `MK2CPP_` 前缀（`MK2CPP_Init/CanStep/Step/Version`），放在
   `include/mk2cpp.h`；**不得**定义与 GT 冲突的全局。
@@ -63,7 +63,7 @@
 
 ## 3. 证据与测试
 
-- 任何"GT 行为 X"的断言必须给出来源（`../src/` 行号或 `tools/baselines/` 证据）。
+- 任何"GT 行为 X"的断言必须给出来源（仓库根 `src/` 行号或 `tools/baselines/` 证据）。
 - 每个里程碑的 oracle 脚本放 `tests/`（入库），语料与输出放本地。
 - co-sim 分歧必须能一键复现：保存 `out/cosim/divergence_<cycle>.txt` 与触发命令。
 - M4.5 原厂对照固定素材来源、输入时序和 PCM/滤波配置，比较逻辑状态、事件、PCM 提交和音频。
@@ -79,7 +79,8 @@
   本地目录布局**；本地资料的忽略方式不入库文档。提交前用 `git status`
   确认无派生文件、`git check-ignore` 确认命中 `.gitignore`。
 - 调试产物写 `out/` 或 `%TEMP%\opencode\`，收尾清空。
-- `../build/` 只放运行资产（可执行文件必须与 ROM 同目录，GT 以 exe 目录为 BasePath）。
+- 仓库根 `build/` 保留构建系统与运行资产。当前 GT 参考运行从 exe 目录加载 ROM；
+  这项目录约束不适用于待实现的透明 bank 模式，也不禁止独立测试目录。
 
 ## 5. 工作流
 
@@ -93,7 +94,7 @@
 
 ## 6. 与既有工程的关系
 
-- `../tools/` 的反汇编/verify/VM 是 T2 工具，可继续复用；GT `../src/` 是 T0 oracle。
-- `../tools/docs/` 是证据主线；`mk2cpp/docs/` 只放本工程特有设计与状态。
+- 仓库根 `tools/` 的反汇编/verify/VM 是 T2 工具，可继续复用；`src/` 是 GT 参考实现。
+- `tools/docs/` 保留原 ROM/硬件证据与旧扩容研究；当前路线和施工入口为 `mk2cpp/docs/00`、13–16。
 - 复音扩展（256 目标）复用 `task_irq_map.md` §4 的 O1–O10 中仍适用的行为判据；
   原硬件窗口/指令时序专属判据需按原生架构重写，并满足 00/13 的真 256 要求。

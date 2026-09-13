@@ -4,9 +4,14 @@ Standalone reimplementation of the Nuked-SC55 main CPU (H8/532) / SM sub-CPU /
 PCM engine, plus disassemblers, verification tools and research docs used to
 check everything against the reference emulator (`../src/`, `../build/nuked-sc55.exe`).
 
-All tools are **C** and built with clang (no Python toolchain; `python/` is a
-bundled CPython kept *only* to satisfy LLDB's `python311.dll` dependency when
-debugging — project tooling must stay in C).
+The VM, disassemblers and verification executables here are C tools built with clang.
+The regression orchestration and code-generation helpers in `mk2cpp/` also use
+Python 3; see [the test documentation](../mk2cpp/tests/README.md).
+Use a separately installed interpreter; do not commit an embedded Python runtime.
+
+Current development follows [M4.5 and M5](../mk2cpp/README.md).
+The ROM-patching extension plans under `docs/` are historical research, not the
+current implementation plan. The VM retains some of those experimental features.
 
 ## Layout
 
@@ -47,7 +52,8 @@ is on every contributor.
 
 - `../build/` holds only build system + runtime assets (exe/pdb, rom1/rom2/
   rom_sm, waverom1/2, `back.data`, SDL2.dll). GT uses the exe directory as the
-  ROM BasePath (prints `Base path is: ...`), so executables must stay there.
+  ROM BasePath (prints `Base path is: ...`) for current reference runs. This does
+  not impose a ROM dependency on the planned native transparent-bank mode.
 - All debug outputs (traces, logs, `.out`, snapshots) go to `%TEMP%\opencode\`
   (or a scratch dir), never into `build/` or `tools/`.
 - Baseline fixtures live in `baselines/`; see `baselines/README.md`.
@@ -74,8 +80,9 @@ h8vm.exe rom1.bin rom2.bin rom_sm.bin [waverom1.bin waverom2.bin] [limit] [noreg
   positions. GT and VM produce byte-identical files on the same window.
 - Wave ROMs are unscrambled after load (same permutation as the reference).
 
-The VM also backs extension pages: page 6 and page 7 (64KB each) are real RAM
-(`b_ram`/`b_ram2`), matching GT's extension mapping (`src/mcu.cpp`).
+The VM retains experimental backing for pages 6 and 7 (64KB each,
+`b_ram`/`b_ram2`). Current GT `src/mcu.cpp` no longer has this extension mapping;
+these VM features are not evidence of current GT polyphony support.
 
 ## verify — `verify/verify_dasm.exe`
 

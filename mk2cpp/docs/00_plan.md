@@ -41,7 +41,7 @@
 
 ### M1 基础设施（原始设计）
 交付：
-- `mk2cpp/mk2cpp.h` + `mk2cpp.cpp`：GT 集成 ABI（`MK2CPP_Init/CanStep/Step`）、
+- `mk2cpp/include/mk2cpp.h` + `mk2cpp/src/mk2cpp.cpp`：GT 集成 ABI（`MK2CPP_Init/CanStep/Step`）、
   `-mk2cpp` 开关、未翻译 PC 回退解释器、fallback 统计。
 - `tools/h8lift`：输入 rom1/rom2 + PC 集 + flow 边，输出 GT 可直接编译的
   C++ 翻译实现 + 映射表（`src/gen/`，本地不入 git）。
@@ -50,7 +50,7 @@
 - 覆盖率仪表盘：执行 PC 集（`../tools/baselines/pc_main.txt`）+ 静态可达集，
   统计已翻译/兜底/缺失。
 oracle：
-- 从 reset 跑 3M 指令（对照 `../tools/baselines/trace_boot3m_base.txt`）两模式 0 分歧；
+- 从 reset 跑到主时间 3M cycles（对照仓库根 `tools/baselines/trace_boot3m_base.txt`）两模式 0 分歧；
 - 从快照跑 200M–202M 窗口 0 分歧（对照 `trace_200m_base.txt`）。
 
 ### M2 主固件全执行面 — ✅ 达成（2026-09-11）

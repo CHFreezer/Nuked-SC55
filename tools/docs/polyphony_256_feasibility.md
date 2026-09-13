@@ -1,5 +1,9 @@
 # Nuked-SC55 mkII — polyphony feasibility study (target 256; 255 = compromise cap; research-only, no source modified)
 
+> **适用范围（2026-09-13）**：以下是旧 H8/ROM 补丁路线的容量分析；D1/page6/page7 推荐已被
+> [M4.5 原生重建 → M5 真 256](../../mk2cpp/docs/00_plan.md) 的路线替代。
+> 算术与 ROM 证据仍可参考，文中“current plan / recommended”按研究当时的状态理解。
+
 > **口径修订（2026-09-11）**：项目目标 = **256 声同时发音**；本文研究的 **N=255**
 > 是 `0xff` 哨兵 + 8-bit 池计数妥协下的阶段性上限，**非最终目标**。文中所有
 > “255-voice / 目标 N=255”表述均按“妥协上限”理解；真 256 需额外的哨兵表示/
