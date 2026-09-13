@@ -33,8 +33,9 @@ M4.5 通过控制接口与时钟适配驱动它，保留其合成行为。
 
 **M4.5 施工入口**：[14 架构](docs/14_m45_native_architecture.md) 定义模块、状态、
 设备接口与时序边界；[15 施工规程](docs/15_m45_construction_guide.md) 定义算法契约、
-阶段交付和首个完整算法样板；[16 透明 bank](docs/16_transparent_bank.md) 定义 WAV 编辑、
-原厂兼容和自定义采样源。按此实施，旧 07–11 用作证据，不直接照其 L0 草案施工。
+阶段交付和首个完整算法样板；[16 透明 bank](docs/16_transparent_bank.md) 优先验证
+metadata + 解码 PCM 的可逆表示，定义 WAV 编辑与原厂 bit 验收。按此实施，旧 07–11
+用作证据，不直接照其 L0 草案施工。
 
 命名说明：`mk2cpp` = **MK2 ROM → C++**（准确）。不使用 `h8cpp` 这类名字——
 GT 是可跑多种固件的 H8 模拟器，本工程翻译的是 **MK2 的 ROM 代码**，不是重写 CPU 核；
